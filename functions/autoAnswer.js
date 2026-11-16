@@ -10,6 +10,16 @@
         isProcessing = true;
 
         try {
+            // 1. Quét Canvas / Cocos2d minigame
+            if (IOE.features?.canvasMode !== false && IOE.canvas?.solveCanvasGame) {
+                const canvasSolved = await IOE.canvas.solveCanvasGame();
+                if (canvasSolved) {
+                    await IOE.delay(IOE.featureConfigs?.autoDelay || 1500);
+                    return;
+                }
+            }
+
+            // 2. Quét Web DOM
             const qEl = document.querySelector('.question-content, .exam-content, .title-question, .content-question, #question-content');
             const qText = qEl ? qEl.innerText.trim() : '';
 

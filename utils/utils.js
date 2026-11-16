@@ -78,7 +78,7 @@
             freezeTimer: true
         },
         featureConfigs: {
-            apiKey: '',
+            apiKey: (typeof localStorage !== 'undefined' ? localStorage.getItem('IOE_API_KEY') || '' : ''),
             autoDelay: 1500,
             questionMode: 'stealth'
         }

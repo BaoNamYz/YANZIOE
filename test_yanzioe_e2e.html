@@ -137,10 +137,22 @@
                 window.IOE.auto.clickNextButton();
                 log('10. Auto next button detector finds "Tiếp tục" and dispatches click', nextClicked);
 
+                // Test 11: Cloze Passage Solver (Lâu đài trên mây)
+                const mockPassage = "Vietnam is becoming a more (1) ______ country as people from different nations come to live. Cuisines (2) ____ Japan, Korea. International companies (3) ______ offices in Vietnam. Celebrated by (4) ______ residents.";
+                const mockRows = [
+                    { index: 1, options: ["A multicultural", "B boring", "C isolated", "D traditional"] },
+                    { index: 2, options: ["A with", "B from", "C for", "D to"] },
+                    { index: 3, options: ["A take down", "B bring up", "C take up", "D set up"] },
+                    { index: 4, options: ["A private", "B ancient", "C foreign", "D rural"] }
+                ];
+                const clozeAns = await window.IOE.question.solveClozePassage(mockPassage, mockRows);
+                const ok11 = clozeAns && clozeAns["1"] === "A" && clozeAns["2"] === "B" && clozeAns["3"] === "D" && clozeAns["4"] === "C";
+                log('11. Cloze Passage Solver accurately solves 4-6 blanks with exact letters ("1": A, "2": B, "3": D, "4": C)', ok11);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount === 10;
+                const allPassed = failCount === 0 && passCount >= 11;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/10 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount}/11 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';

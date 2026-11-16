@@ -61,7 +61,7 @@
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.3</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.4</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -181,7 +181,7 @@
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#020617;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:8px;font-family:monospace;font-size:10px;color:#a5f3fc;height:120px;overflow-y:auto;line-height:1.4;margin-bottom:8px;">
-                        [YANZIOE] Khởi động hệ thống v1.0.3 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.0.4 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
@@ -323,6 +323,11 @@
             appendLog(`Auto-Answer: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
         });
 
+        document.getElementById('yanz-chk-canvas')?.addEventListener('change', (e) => {
+            IOE.features.canvasMode = e.target.checked;
+            appendLog(`Quét Cocos2d / Canvas: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
+        });
+
         document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {
             IOE.features.showAnswers = e.target.checked;
         });
@@ -360,7 +365,7 @@
             const aEl = document.getElementById('yanz-ans-result');
             const tEl = document.getElementById('yanz-ans-thinking');
             const cEl = document.getElementById('yanz-stat-count');
-            if (qEl && meta.qText) qEl.innerText = meta.qText;
+            if (qEl && (meta.qText || meta.qId)) qEl.innerText = meta.qText || meta.qId;
             if (aEl && meta.answer) aEl.innerText = meta.answer;
             if (tEl && meta.thinking) tEl.innerText = meta.thinking;
             if (cEl) cEl.innerText = `${IOE.state.solvedMeta.size} câu`;

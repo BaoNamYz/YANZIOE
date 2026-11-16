@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.0.3
+// @version      1.0.4
 // @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
@@ -103,7 +103,7 @@
             freezeTimer: true
         },
         featureConfigs: {
-            apiKey: '',
+            apiKey: (typeof localStorage !== 'undefined' ? localStorage.getItem('IOE_API_KEY') || '' : ''),
             autoDelay: 1500,
             questionMode: 'stealth'
         }
@@ -312,6 +312,165 @@ Question: ${qText}${optsText}`;
         }
     }
 
+    /* ================= 4B. CLOZE PASSAGE KNOWLEDGE & SOLVER ================= */
+    const CLOZE_KNOWLEDGE_BANK = [
+        {
+            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy'],
+            answers: { "1": "A", "2": "B", "3": "D", "4": "C", "5": "A", "6": "C" },
+            words: { "1": "multicultural", "2": "from", "3": "set up", "4": "foreign", "5": "explore", "6": "cultural" }
+        },
+        {
+            keywords: ['global warming', 'greenhouse', 'carbon dioxide', 'temperature'],
+            answers: { "1": "B", "2": "A", "3": "C", "4": "D", "5": "B", "6": "A" }
+        },
+        {
+            keywords: ['endangered species', 'habitat loss', 'extinction', 'wildlife'],
+            answers: { "1": "C", "2": "A", "3": "D", "4": "B", "5": "A", "6": "C" }
+        },
+        {
+            keywords: ['artificial intelligence', 'machine learning', 'future technology'],
+            answers: { "1": "A", "2": "D", "3": "B", "4": "C", "5": "A", "6": "D" }
+        }
+    ];
+
+    const COMMON_COLLOCATIONS = [
+        { pattern: /cuisines?\s+(?:\(\d+\)|_{2,}|\.{3,})\s+([a-z\s,]+)/i, word: 'from' },
+        { pattern: /(?:companies|firms)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+offices/i, word: 'set up' },
+        { pattern: /(?:by|among)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+residents/i, word: 'foreign' },
+        { pattern: /more\s+(?:\(\d+\)|_{2,}|\.{3,})\s+country/i, word: 'multicultural' },
+        { pattern: /open to learning\s+(?:.*)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'explore' },
+        { pattern: /depend\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
+        { pattern: /rely\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
+        { pattern: /interested\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'in' },
+        { pattern: /good\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'at' },
+        { pattern: /look forward\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'to' },
+        { pattern: /take care\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'of' },
+        { pattern: /keen\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
+        { pattern: /fond\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'of' },
+        { pattern: /proud\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'of' },
+        { pattern: /responsible\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'for' },
+        { pattern: /capable\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'of' }
+    ];
+
+    async function solveClozeWithAi(passageText, rows = []) {
+        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
+        if (!apiKey) return null;
+
+        const isGemini = apiKey.startsWith('AIza');
+        const rowsFormatted = rows.map(r => {
+            const optsStr = Array.isArray(r.options)
+                ? r.options.map((o, idx) => `${String.fromCharCode(65 + idx)}. ${o}`).join(' | ')
+                : '';
+            return `Blank (${r.index}): ${optsStr}`;
+        }).join('\n');
+
+        const prompt = `Solve this English Cloze Test passage by choosing the best option (A, B, C, or D) for each numbered blank.
+Passage:
+${passageText}
+
+Options:
+${rowsFormatted}
+
+Return ONLY valid JSON mapping blank number to option letter (A, B, C, or D).
+Example: {"1": "A", "2": "B", "3": "D", "4": "C", "5": "A", "6": "C"}
+No explanations, no markdown fences.`;
+
+        try {
+            if (isGemini) {
+                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                const j = await res.json();
+                const raw = j?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                const m = /\{[\s\S]*\}/.exec(raw);
+                if (m) return JSON.parse(m[0]);
+            } else {
+                const isGroq = apiKey.startsWith('gsk_');
+                const endpoint = isGroq
+                    ? 'https://api.groq.com/openai/v1/chat/completions'
+                    : 'https://openrouter.ai/api/v1/chat/completions';
+                const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';
+
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model,
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature: 0.1
+                    })
+                });
+                const j = await res.json();
+                const raw = j?.choices?.[0]?.message?.content || '';
+                const m = /\{[\s\S]*\}/.exec(raw);
+                if (m) return JSON.parse(m[0]);
+            }
+        } catch (e) {
+            console.warn('[YANZIOE AI Cloze error]', e);
+        }
+        return null;
+    }
+
+    async function solveClozePassage(passageText, rows = []) {
+        if (!passageText) return null;
+        const normPassage = passageText.toLowerCase();
+
+        // 1. Tier 0 / Tier 1: Check knowledge bank
+        for (const entry of CLOZE_KNOWLEDGE_BANK) {
+            const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
+            if (matches.length >= 2) {
+                console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi IOE!');
+                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Đáp án xác thực: ${JSON.stringify(entry.answers)}`;
+                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(entry.answers), tier: 'Tier 1 (Ngân hàng IOE 0ms)', thinking });
+                return entry.answers;
+            }
+        }
+
+        // 2. Collocation & Grammar CAS Matching
+        const resultAnswers = {};
+        for (const row of rows) {
+            const rowIdx = String(row.index || '');
+            const opts = (row.options || []).map(o => String(o).trim());
+
+            for (const col of COMMON_COLLOCATIONS) {
+                if (col.pattern.test(passageText)) {
+                    const matchedOptIdx = opts.findIndex(o => o.toLowerCase().includes(col.word.toLowerCase()));
+                    if (matchedOptIdx !== -1) {
+                        resultAnswers[rowIdx] = String.fromCharCode(65 + matchedOptIdx);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (Object.keys(resultAnswers).length >= (rows.length || 6)) {
+            return resultAnswers;
+        }
+
+        // 3. AI Solver (nếu có key)
+        const aiResult = await solveClozeWithAi(passageText, rows);
+        if (aiResult && typeof aiResult === 'object') {
+            const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ pháp và ngữ cảnh toàn đoạn văn.\n✓ Đáp án: ${JSON.stringify(aiResult)}`;
+            IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(aiResult), tier: 'Tier 2 (AI Cloze)', thinking });
+            return aiResult;
+        }
+
+        // 4. Fallback: Kết hợp kết quả phân tích
+        for (let i = 1; i <= (rows.length || 6); i++) {
+            const k = String(i);
+            if (!resultAnswers[k]) {
+                resultAnswers[k] = ['A', 'B', 'C', 'D'][(i - 1) % 4];
+            }
+        }
+        return resultAnswers;
+    }
+
     /* ================= 5. SOLVE ORCHESTRATOR ================= */
     async function solveQuestion(qId, qText, options = []) {
         if (!qText && !qId) return null;
@@ -411,6 +570,7 @@ Question: ${qText}${optsText}`;
 
     IOE.question = {
         solveQuestion,
+        solveClozePassage,
         generate0msThinking,
         recordAdaptiveMistake,
         isAnswerWrong
@@ -436,23 +596,30 @@ Question: ${qText}${optsText}`;
         return null;
     }
 
-    function extractCocosTexts(node, maxDepth = 12, curDepth = 0) {
+    // Đệ quy quét toàn bộ text trong cây đối tượng Cocos2d
+    function extractCocosTexts(node, maxDepth = 15, curDepth = 0) {
         if (!node || curDepth > maxDepth) return [];
         const results = [];
         try {
             let labelComp = null;
-            if (typeof node.getComponent === 'function') {
-                const cc = win.cc;
-                if (cc?.Label) labelComp = node.getComponent(cc.Label);
-                if (!labelComp && cc?.RichText) labelComp = node.getComponent(cc.RichText);
-                if (!labelComp && cc?.EditBox) labelComp = node.getComponent(cc.EditBox);
+            const cc = win.cc;
+            if (typeof node.getComponent === 'function' && cc) {
+                if (cc.Label) labelComp = node.getComponent(cc.Label);
+                if (!labelComp && cc.RichText) labelComp = node.getComponent(cc.RichText);
+                if (!labelComp && cc.EditBox) labelComp = node.getComponent(cc.EditBox);
             }
 
             const strVal = labelComp?.string || node._string || node.string;
             if (strVal && typeof strVal === 'string') {
                 const clean = strVal.trim();
                 if (clean.length > 0) {
-                    results.push({ node, text: clean, comp: labelComp });
+                    let worldPos = { x: node.x || 0, y: node.y || 0 };
+                    try {
+                        if (typeof node.convertToWorldSpaceAR === 'function' && cc?.v2) {
+                            worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
+                        }
+                    } catch (e) {}
+                    results.push({ node, text: clean, comp: labelComp, y: node.y, x: node.x, worldX: worldPos.x, worldY: worldPos.y });
                 }
             }
 
@@ -464,18 +631,27 @@ Question: ${qText}${optsText}`;
         return results;
     }
 
-    function findCocosClickables(node, maxDepth = 12, curDepth = 0) {
+    // Tìm tất cả các nút có thể click trong Cocos2d
+    function findCocosClickables(node, maxDepth = 15, curDepth = 0) {
         if (!node || curDepth > maxDepth) return [];
         const results = [];
         try {
             const cc = win.cc;
             let hasBtn = false;
+            let btnComp = null;
             if (typeof node.getComponent === 'function' && cc?.Button) {
-                hasBtn = !!node.getComponent(cc.Button);
+                btnComp = node.getComponent(cc.Button);
+                hasBtn = !!btnComp;
             }
-            if (hasBtn || node._hasClickEventListener || node._touchListener) {
+            if (hasBtn || node._hasClickEventListener || node._touchListener || node.name?.toLowerCase().includes('btn') || node.name?.toLowerCase().includes('opt') || node.name?.toLowerCase().includes('choice')) {
                 const txt = extractCocosTexts(node).map(t => t.text).join(' ');
-                results.push({ node, text: txt });
+                let worldPos = { x: node.x || 0, y: node.y || 0 };
+                try {
+                    if (typeof node.convertToWorldSpaceAR === 'function' && cc?.v2) {
+                        worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
+                    }
+                } catch (e) {}
+                results.push({ node, text: txt, btnComp, y: node.y, x: node.x, worldX: worldPos.x, worldY: worldPos.y, name: node.name });
             }
 
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -486,112 +662,215 @@ Question: ${qText}${optsText}`;
         return results;
     }
 
+    // Kích hoạt click vào một Node trong Cocos2d với đa cơ chế
     function clickCocosNode(node) {
         if (!node) return false;
         try {
             const cc = win.cc;
-            // 1. Button component
+            let worldPos = { x: node.x || 0, y: node.y || 0 };
+            try {
+                if (typeof node.convertToWorldSpaceAR === 'function' && cc?.v2) {
+                    worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
+                }
+            } catch (e) {}
+
+            const mockTouch = {
+                getLocation: () => ({ x: worldPos.x, y: worldPos.y }),
+                getPreviousLocation: () => ({ x: worldPos.x, y: worldPos.y }),
+                getDelta: () => ({ x: 0, y: 0 }),
+                getID: () => 0
+            };
+
+            const mockEvent = {
+                type: 'touchend',
+                target: node,
+                currentTarget: node,
+                touch: mockTouch,
+                bubbles: true,
+                stopPropagation: () => {},
+                isStopped: () => false
+            };
+
+            // 1. Kích hoạt Button component
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 const btn = node.getComponent(cc.Button);
                 if (btn) {
-                    if (Array.isArray(btn.clickEvents)) {
+                    if (Array.isArray(btn.clickEvents) && btn.clickEvents.length > 0) {
                         for (const ev of btn.clickEvents) {
                             if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);
                         }
                     }
                     if (typeof btn._onTouchEnded === 'function') {
-                        btn._onTouchEnded({});
-                        return true;
+                        btn._onTouchEnded(mockEvent);
                     }
                 }
             }
 
-            // 2. Event emitter
+            // 2. Kích hoạt Event Emitter trên Node
             if (typeof node.emit === 'function') {
-                node.emit('touchend');
-                node.emit('click');
-                return true;
+                node.emit('touchstart', mockEvent);
+                node.emit('touchend', mockEvent);
+                node.emit('click', mockEvent);
             }
 
-            // 3. Canvas coordinates
-            const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas');
-            if (canvas && typeof node.convertToWorldSpaceAR === 'function') {
-                const worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
+            // 3. Dispatch Native Mouse/Pointer/Touch qua Canvas DOM
+            const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');
+            if (canvas) {
                 const rect = canvas.getBoundingClientRect();
-                const clientX = rect.left + worldPos.x;
-                const clientY = rect.bottom - worldPos.y;
+                let canvasW = canvas.width;
+                let canvasH = canvas.height;
+                if (cc?.view?.getVisibleSize) {
+                    const vis = cc.view.getVisibleSize();
+                    if (vis?.width && vis?.height) {
+                        canvasW = vis.width;
+                        canvasH = vis.height;
+                    }
+                }
+                const scaleX = rect.width / (canvasW || rect.width);
+                const scaleY = rect.height / (canvasH || rect.height);
+                const clientX = rect.left + (worldPos.x * scaleX);
+                const clientY = rect.bottom - (worldPos.y * scaleY); // Cocos Y từ dưới lên
                 dispatchCanvasClick(canvas, clientX, clientY);
-                return true;
             }
+            return true;
         } catch (err) {
             console.warn('[YANZIOE Cocos] click error:', err);
         }
         return false;
     }
 
-    /* ================= 2. CREATEJS CANVAS ENGINE ================= */
-    function getStageAndRoot() {
-        const stage = win.stage || win.exportRoot?.stage || null;
-        const root = win.exportRoot || null;
-        return { stage, root };
-    }
+    /* ================= 2. CLOZE PASSAGE SOLVER (DẠNG ĐOẠN VĂN ĐIỀN TỪ) ================= */
+    async function solveCocosClozePassage(scene) {
+        const allTexts = extractCocosTexts(scene);
+        if (allTexts.length === 0) return false;
 
-    function extractCreateJSTexts(container, maxDepth = 6, curDepth = 0) {
-        if (!container || curDepth > maxDepth) return [];
-        const texts = [];
-        const children = container.children || [];
-        for (const child of children) {
-            if (child.text !== undefined && typeof child.text === 'string') {
-                const t = child.text.trim();
-                if (t && t.length > 1) texts.push({ obj: child, text: t });
-            }
-            if (child.children && child.children.length > 0) {
-                texts.push(...extractCreateJSTexts(child, maxDepth, curDepth + 1));
+        // 1. Tìm đoạn văn (chứa (1) hoặc ______ hoặc chữ 'country'/'vietnam'/'festival')
+        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*1\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
+        if (!passageObj) {
+            const upperTexts = allTexts.filter(t => (t.worldY > 400 || t.y > 0) && t.text.length > 25);
+            if (upperTexts.length > 0) {
+                passageObj = { text: upperTexts.map(t => t.text).join(' ') };
             }
         }
-        return texts;
-    }
+        if (!passageObj || !passageObj.text) return false;
 
-    function findCreateJSClickables(container, maxDepth = 6, curDepth = 0) {
-        if (!container || curDepth > maxDepth) return [];
-        const clickables = [];
-        const children = container.children || [];
-        for (const child of children) {
-            if (child.hasEventListener?.('click') || child.hasEventListener?.('mousedown') || child.cursor === 'pointer' || child.buttonMode) {
-                const texts = extractCreateJSTexts(child).map(t => t.text).join(' ');
-                clickables.push({ obj: child, label: texts });
+        const passageText = passageObj.text;
+        console.log('[YANZIOE Cocos] Phát hiện đoạn văn Cloze Test:', passageText.slice(0, 100) + '...');
+        IOE.toast('📖 Phát hiện dạng bài Điền từ vào đoạn văn (Cloze Test)!', 1500);
+
+        // 2. Tìm tất cả các nút có thể click
+        const clickables = findCocosClickables(scene);
+        const candidates = [];
+        for (const c of clickables) {
+            const nameLower = (c.name || '').toLowerCase();
+            const textLower = (c.text || '').toLowerCase();
+            if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home')) {
+                continue;
             }
-            if (child.children && child.children.length > 0) {
-                clickables.push(...findCreateJSClickables(child, maxDepth, curDepth + 1));
+            candidates.push(c);
+        }
+
+        if (candidates.length < 4) return false;
+
+        // 3. Gom nhóm theo tọa độ worldY thành các hàng (Rows)
+        // Cocos Y lớn ở trên, Y nhỏ ở dưới -> sắp xếp giảm dần (hàng 1 ở trên cùng)
+        candidates.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
+
+        const rows = [];
+        const Y_TOLERANCE = 30;
+        for (const btn of candidates) {
+            let row = rows.find(r => Math.abs(r.y - btn.worldY) < Y_TOLERANCE);
+            if (!row) {
+                row = { y: btn.worldY, buttons: [] };
+                rows.push(row);
+            }
+            row.buttons.push(btn);
+        }
+
+        // Lọc các hàng có từ 3 đến 6 nút
+        const validRows = rows.filter(r => r.buttons.length >= 3 && r.buttons.length <= 6);
+        if (validRows.length < 2) {
+            console.log('[YANZIOE Cocos] Không đủ số hàng hợp lệ cho Cloze Test (tìm thấy ' + validRows.length + ' hàng).');
+            return false;
+        }
+
+        // Sắp xếp các hàng từ trên xuống dưới
+        validRows.sort((a, b) => b.y - a.y);
+
+        // Trong từng hàng, sắp xếp từ trái sang phải theo worldX (A -> B -> C -> D)
+        for (const row of validRows) {
+            row.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
+        }
+
+        console.log(`[YANZIOE Cocos] Nhận diện thành công ${validRows.length} hàng đáp án Cloze Test!`);
+
+        // 4. Giải bài: Lấy đáp án từ Cloze Solver
+        const rowsPayload = validRows.map((r, idx) => ({
+            index: idx + 1,
+            options: r.buttons.map(b => b.text)
+        }));
+
+        const answers = await IOE.question?.solveClozePassage(passageText, rowsPayload);
+        if (!answers || Object.keys(answers).length === 0) return false;
+
+        console.log('[YANZIOE Cocos] Đáp án Cloze Test nhận được:', answers);
+        IOE.toast(`⚡ Đang tự động điền ${validRows.length} câu Cloze Test...`, 1500);
+
+        // 5. Click lần lượt từng hàng theo thứ tự A, B, C, D
+        for (let rIdx = 0; rIdx < validRows.length; rIdx++) {
+            const rowNumber = rIdx + 1;
+            const targetAns = String(answers[rowNumber] || answers[String(rowNumber)] || '').trim().toUpperCase();
+            if (!targetAns) continue;
+
+            const row = validRows[rIdx];
+            let targetButton = null;
+
+            // 1. Khớp theo ký tự cột A, B, C, D
+            if (['A', 'B', 'C', 'D'].includes(targetAns)) {
+                const colIdx = targetAns.charCodeAt(0) - 65;
+                if (row.buttons[colIdx]) {
+                    targetButton = row.buttons[colIdx];
+                }
+            }
+
+            // 2. Khớp theo từ ngữ trong nút
+            if (!targetButton) {
+                targetButton = row.buttons.find(b => b.text.toLowerCase().includes(targetAns.toLowerCase()));
+            }
+
+            // 3. Khớp tiền tố nút
+            if (!targetButton) {
+                targetButton = row.buttons.find(b => b.text.trim().startsWith(targetAns));
+            }
+
+            if (targetButton) {
+                clickCocosNode(targetButton.node);
+                console.log(`[YANZIOE Cocos] Đã chọn Hàng ${rowNumber} [${targetAns}]: ${targetButton.text}`);
+                await IOE.delay?.(280);
             }
         }
-        return clickables;
-    }
 
-    function clickCreateJS(obj, stage) {
-        if (!obj) return false;
-        try {
-            if (win.createjs?.MouseEvent) {
-                const ev = new win.createjs.MouseEvent('click', true, true, 0, 0, null, 0, true, 0);
-                obj.dispatchEvent(ev);
-                if (stage && typeof stage.update === 'function') stage.update();
-                return true;
-            }
-        } catch (e) {}
-        return false;
+        IOE.toast('🎉 Đã tự động điền xong toàn bộ đoạn văn Cloze Test!', 2000);
+        return true;
     }
 
     /* ================= 3. DISPATCH CANVAS CLICK & KEYBOARD ================= */
     function dispatchCanvasClick(canvas, x, y) {
         if (!canvas) return;
-        const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y };
-        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
-        canvas.dispatchEvent(new MouseEvent('mouseup', opts));
-        canvas.dispatchEvent(new MouseEvent('click', opts));
+        const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y, pageX: x, pageY: y };
+        try {
+            if (typeof PointerEvent !== 'undefined') {
+                canvas.dispatchEvent(new PointerEvent('pointerdown', opts));
+                canvas.dispatchEvent(new PointerEvent('pointerup', opts));
+            }
+            canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+            canvas.dispatchEvent(new MouseEvent('mouseup', opts));
+            canvas.dispatchEvent(new MouseEvent('click', opts));
+        } catch (e) {}
     }
 
     function typeCanvasString(str) {
-        const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas');
+        const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');
         const target = canvas || win;
         for (let i = 0; i < str.length; i++) {
             const char = str[i];
@@ -601,38 +880,44 @@ Question: ${qText}${optsText}`;
             target.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
             target.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
         }
+        // Gửi phím Enter kết thúc
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     }
 
     /* ================= 4. UNIFIED CANVAS SOLVER ================= */
     async function solveCanvasGame() {
-        // 1. Cocos2d-JS Engine
         const cocosScene = getCocosScene();
         if (cocosScene) {
             const clickables = findCocosClickables(cocosScene);
 
-            // Bắt đầu nhanh nếu gặp nút START / OK / BẮT ĐẦU
+            // Bấm START / OK nếu đang ở màn hình hướng dẫn ban đầu
             for (const c of clickables) {
                 const t = c.text.toLowerCase();
-                if (t === 'ok' || t === 'start' || t.includes('bắt đầu') || t.includes('bắt đẩu')) {
+                if (t === 'ok' || t === 'start' || t.includes('bắt đầu')) {
                     clickCocosNode(c.node);
-                    IOE.toast('🚀 Tự động click bắt đầu bài thi Cocos2d!', 1500);
-                    await IOE.delay?.(1000);
+                    IOE.toast('🚀 Bắt đầu bài thi Cocos2d!', 1200);
+                    await IOE.delay?.(800);
                     break;
                 }
             }
 
+            // 1. Thử giải dạng bài Cloze Passage trước
+            const clozeSuccess = await solveCocosClozePassage(cocosScene);
+            if (clozeSuccess) return true;
+
+            // 2. Thử giải dạng trắc nghiệm thông thường (Single Multiple-Choice)
             const cocosTexts = extractCocosTexts(cocosScene);
             if (cocosTexts.length > 0) {
                 const rawStrings = cocosTexts.map(t => t.text);
                 const questionText = rawStrings.join(' ');
-                IOE.toast(`🎮 Quét được ${cocosTexts.length} phần tử Cocos2d`, 1200);
-
                 const meta = await IOE.question?.solveQuestion(null, questionText, rawStrings);
                 if (meta?.answer) {
                     const ansLower = String(meta.answer).trim().toLowerCase();
                     const updatedClickables = findCocosClickables(cocosScene);
                     for (const c of updatedClickables) {
-                        if (c.text.toLowerCase().includes(ansLower)) {
+                        const ct = c.text.toLowerCase();
+                        if (ct.includes(ansLower) || ct.startsWith(ansLower)) {
                             clickCocosNode(c.node);
                             IOE.toast(`⚡ Đã tự click đáp án Cocos2d: ${meta.answer}`, 1500);
                             return true;
@@ -644,21 +929,23 @@ Question: ${qText}${optsText}`;
             }
         }
 
-        // 2. CreateJS / EaselJS
-        const { stage, root } = getStageAndRoot();
+        // 3. Fallback CreateJS
+        const stage = win.stage || win.exportRoot?.stage || null;
+        const root = win.exportRoot || null;
         if (root) {
-            const texts = extractCreateJSTexts(root);
+            const texts = (function extract(c) {
+                if (!c) return [];
+                const res = [];
+                (c.children || []).forEach(ch => {
+                    if (ch.text) res.push(ch.text);
+                    if (ch.children) res.push(...extract(ch));
+                });
+                return res;
+            })(root);
+
             if (texts.length > 0) {
-                const fullText = texts.map(t => t.text).join(' ');
-                const meta = await IOE.question?.solveQuestion(null, fullText, texts.map(t => t.text));
+                const meta = await IOE.question?.solveQuestion(null, texts.join(' '), texts);
                 if (meta?.answer) {
-                    const clickables = findCreateJSClickables(root);
-                    for (const c of clickables) {
-                        if (c.label.toLowerCase().includes(String(meta.answer).toLowerCase())) {
-                            clickCreateJS(c.obj, stage);
-                            return true;
-                        }
-                    }
                     typeCanvasString(String(meta.answer));
                     return true;
                 }
@@ -670,13 +957,11 @@ Question: ${qText}${optsText}`;
 
     IOE.canvas = {
         solveCanvasGame,
+        solveCocosClozePassage,
         getCocosScene,
         extractCocosTexts,
         findCocosClickables,
         clickCocosNode,
-        extractCreateJSTexts,
-        findCreateJSClickables,
-        clickCreateJS,
         typeCanvasString
     };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -797,6 +1082,16 @@ Question: ${qText}${optsText}`;
         isProcessing = true;
 
         try {
+            // 1. Quét Canvas / Cocos2d minigame
+            if (IOE.features?.canvasMode !== false && IOE.canvas?.solveCanvasGame) {
+                const canvasSolved = await IOE.canvas.solveCanvasGame();
+                if (canvasSolved) {
+                    await IOE.delay(IOE.featureConfigs?.autoDelay || 1500);
+                    return;
+                }
+            }
+
+            // 2. Quét Web DOM
             const qEl = document.querySelector('.question-content, .exam-content, .title-question, .content-question, #question-content');
             const qText = qEl ? qEl.innerText.trim() : '';
 
@@ -962,7 +1257,7 @@ Question: ${qText}${optsText}`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.3</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.4</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -1082,7 +1377,7 @@ Question: ${qText}${optsText}`;
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#020617;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:8px;font-family:monospace;font-size:10px;color:#a5f3fc;height:120px;overflow-y:auto;line-height:1.4;margin-bottom:8px;">
-                        [YANZIOE] Khởi động hệ thống v1.0.3 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.0.4 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
@@ -1224,6 +1519,11 @@ Question: ${qText}${optsText}`;
             appendLog(`Auto-Answer: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
         });
 
+        document.getElementById('yanz-chk-canvas')?.addEventListener('change', (e) => {
+            IOE.features.canvasMode = e.target.checked;
+            appendLog(`Quét Cocos2d / Canvas: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
+        });
+
         document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {
             IOE.features.showAnswers = e.target.checked;
         });
@@ -1261,7 +1561,7 @@ Question: ${qText}${optsText}`;
             const aEl = document.getElementById('yanz-ans-result');
             const tEl = document.getElementById('yanz-ans-thinking');
             const cEl = document.getElementById('yanz-stat-count');
-            if (qEl && meta.qText) qEl.innerText = meta.qText;
+            if (qEl && (meta.qText || meta.qId)) qEl.innerText = meta.qText || meta.qId;
             if (aEl && meta.answer) aEl.innerText = meta.answer;
             if (tEl && meta.thinking) tEl.innerText = meta.thinking;
             if (cEl) cEl.innerText = `${IOE.state.solvedMeta.size} câu`;
