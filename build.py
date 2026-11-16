@@ -88,7 +88,7 @@ dist_coke_user = ROOT / 'YANZIOE_KoKey.user.js'
 dist_coke_user.write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
 print(f"[OK] Generated {dist_coke_min.name} and {dist_coke_user.name}")
 
-# 5. Helper to write Chrome Extension MV3 with MAIN world execution
+# 5. Helper to write Chrome Extension MV3 with MAIN world execution & Universal DOM Fallback
 def write_extension_dir(target_dir, code, name_suffix=""):
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -121,10 +121,35 @@ def write_extension_dir(target_dir, code, name_suffix=""):
             "https://generativelanguage.googleapis.com/*",
             "https://openrouter.ai/*"
         ],
-        "permissions": ["activeTab", "scripting"]
+        "permissions": ["activeTab", "scripting"],
+        "web_accessible_resources": [
+            {
+                "resources": ["content.js", "YANZIOE.js"],
+                "matches": ["*://ioe.vn/*", "*://*.ioe.vn/*", "*://*.go.vn/*", "*://*.vtc.vn/*", "*://api-edu.go.vn/*"]
+            }
+        ]
     }
+
+    # Universal Wrapper: Tự động đưa code vào MAIN world ngay cả trên trình duyệt không hỗ trợ world: MAIN
+    loader_wrapper = f"""// YANZIOE VIP Universal Main-World Loader
+(function() {{
+    'use strict';
+    if (!document.getElementById('yanzioe-main-script')) {{
+        try {{
+            const s = document.createElement('script');
+            s.id = 'yanzioe-main-script';
+            s.textContent = {json.dumps(code)};
+            (document.head || document.documentElement).appendChild(s);
+        }} catch(e) {{}}
+    }}
+}})();
+
+{code}
+"""
+
     (target_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
-    (target_dir / 'content.js').write_text(code, encoding='utf-8')
+    (target_dir / 'content.js').write_text(loader_wrapper, encoding='utf-8')
+    (target_dir / 'YANZIOE.js').write_text(code, encoding='utf-8')
     print(f"[OK] Extension with MAIN world written to {target_dir.name}")
 
 # Standard Extension in Repo

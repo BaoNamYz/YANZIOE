@@ -33,5 +33,20 @@
   "permissions": [
     "activeTab",
     "scripting"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content.js",
+        "YANZIOE.js"
+      ],
+      "matches": [
+        "*://ioe.vn/*",
+        "*://*.ioe.vn/*",
+        "*://*.go.vn/*",
+        "*://*.vtc.vn/*",
+        "*://api-edu.go.vn/*"
+      ]
+    }
   ]
 }

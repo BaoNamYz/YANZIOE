@@ -70,7 +70,7 @@
             correctAnswers: new Map()
         },
         features: {
-            autoAnswer: false,
+            autoAnswer: true,
             showAnswers: true,
             canvasMode: true,
             streamMode: false,

@@ -71,7 +71,7 @@
             correctAnswers: new Map()
         },
         features: {
-            autoAnswer: false,
+            autoAnswer: true,
             showAnswers: true,
             canvasMode: true,
             streamMode: false,
@@ -693,15 +693,73 @@ No explanations, no markdown fences.`;
     const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
-    /* ================= 1. COCOS2D-JS / COCOS CREATOR ENGINE ================= */
+    /* ================= 1. COCOS2D-JS / COCOS2D-HTML5 / COCOS CREATOR ENGINE ================= */
     function getCocosScene() {
         try {
             const cc = win.cc;
-            if (cc && cc.director && typeof cc.director.getScene === 'function') {
-                return cc.director.getScene();
+            if (cc && cc.director) {
+                // Cocos2d-html5 v3.x (IOE.vn live engine)
+                if (typeof cc.director.getRunningScene === 'function') {
+                    const s = cc.director.getRunningScene();
+                    if (s) return s;
+                }
+                // Cocos Creator engine
+                if (typeof cc.director.getScene === 'function') {
+                    const s = cc.director.getScene();
+                    if (s) return s;
+                }
             }
         } catch (e) {}
         return null;
+    }
+
+    // Trích xuất text đa nền tảng (Cocos2d-html5 LabelTTF/BMFont, ccui.Button/Text & Cocos Creator Component)
+    function getNodeText(node) {
+        if (!node) return '';
+        try {
+            // Cocos2d-html5 v3.x API
+            if (typeof node.getString === 'function') {
+                const s = node.getString();
+                if (s && typeof s === 'string') return s.trim();
+            }
+            if (typeof node.getTitleText === 'function') {
+                const s = node.getTitleText();
+                if (s && typeof s === 'string') return s.trim();
+            }
+            if (typeof node.getStringText === 'function') {
+                const s = node.getStringText();
+                if (s && typeof s === 'string') return s.trim();
+            }
+            // Cocos Creator Component API
+            const cc = win.cc;
+            if (typeof node.getComponent === 'function' && cc) {
+                let comp = null;
+                if (cc.Label) comp = node.getComponent(cc.Label);
+                if (!comp && cc.RichText) comp = node.getComponent(cc.RichText);
+                if (!comp && cc.EditBox) comp = node.getComponent(cc.EditBox);
+                const s = comp?.string;
+                if (s && typeof s === 'string') return s.trim();
+            }
+            // Direct property fallbacks
+            if (node._string && typeof node._string === 'string') return node._string.trim();
+            if (node.string && typeof node.string === 'string') return node.string.trim();
+        } catch (e) {}
+        return '';
+    }
+
+    // Tính tọa độ thế giới đa nền tảng
+    function getNodeWorldPos(node) {
+        let pos = { x: node.x || 0, y: node.y || 0 };
+        try {
+            const cc = win.cc;
+            const origin = cc?.p ? cc.p(0, 0) : (cc?.v2 ? cc.v2(0, 0) : { x: 0, y: 0 });
+            if (typeof node.convertToWorldSpaceAR === 'function') {
+                pos = node.convertToWorldSpaceAR(origin);
+            } else if (typeof node.convertToWorldSpace === 'function') {
+                pos = node.convertToWorldSpace(origin);
+            }
+        } catch (e) {}
+        return pos;
     }
 
     // Đệ quy quét toàn bộ text trong cây đối tượng Cocos2d
@@ -709,26 +767,10 @@ No explanations, no markdown fences.`;
         if (!node || curDepth > maxDepth) return [];
         const results = [];
         try {
-            let labelComp = null;
-            const cc = win.cc;
-            if (typeof node.getComponent === 'function' && cc) {
-                if (cc.Label) labelComp = node.getComponent(cc.Label);
-                if (!labelComp && cc.RichText) labelComp = node.getComponent(cc.RichText);
-                if (!labelComp && cc.EditBox) labelComp = node.getComponent(cc.EditBox);
-            }
-
-            const strVal = labelComp?.string || node._string || node.string;
-            if (strVal && typeof strVal === 'string') {
-                const clean = strVal.trim();
-                if (clean.length > 0) {
-                    let worldPos = { x: node.x || 0, y: node.y || 0 };
-                    try {
-                        if (typeof node.convertToWorldSpaceAR === 'function' && cc?.v2) {
-                            worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
-                        }
-                    } catch (e) {}
-                    results.push({ node, text: clean, comp: labelComp, y: node.y, x: node.x, worldX: worldPos.x, worldY: worldPos.y });
-                }
+            const clean = getNodeText(node);
+            if (clean.length > 0) {
+                const worldPos = getNodeWorldPos(node);
+                results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
             }
 
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -739,27 +781,38 @@ No explanations, no markdown fences.`;
         return results;
     }
 
-    // Tìm tất cả các nút có thể click trong Cocos2d
+    // Tìm tất cả các nút có thể click trong Cocos2d-html5 & Cocos Creator
     function findCocosClickables(node, maxDepth = 15, curDepth = 0) {
         if (!node || curDepth > maxDepth) return [];
         const results = [];
         try {
             const cc = win.cc;
-            let hasBtn = false;
+            let isClickable = false;
             let btnComp = null;
+
+            // Cocos Creator component
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 btnComp = node.getComponent(cc.Button);
-                hasBtn = !!btnComp;
+                if (btnComp) isClickable = true;
             }
-            if (hasBtn || node._hasClickEventListener || node._touchListener || node.name?.toLowerCase().includes('btn') || node.name?.toLowerCase().includes('opt') || node.name?.toLowerCase().includes('choice') || node.name?.toLowerCase().includes('item') || node.name?.toLowerCase().includes('ans')) {
-                const txt = extractCocosTexts(node).map(t => t.text).join(' ');
-                let worldPos = { x: node.x || 0, y: node.y || 0 };
-                try {
-                    if (typeof node.convertToWorldSpaceAR === 'function' && cc?.v2) {
-                        worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
-                    }
-                } catch (e) {}
-                results.push({ node, text: txt, btnComp, y: node.y, x: node.x, worldX: worldPos.x, worldY: worldPos.y, name: node.name });
+            // Cocos2d-html5 Menu & UI Buttons
+            if (cc?.MenuItem && node instanceof cc.MenuItem) isClickable = true;
+            if (cc?.ui?.Button && node instanceof cc.ui.Button) isClickable = true;
+            if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;
+            if (node._hasClickEventListener || node._touchListener || node._touchEnabled) isClickable = true;
+
+            const name = (node.name || '').toLowerCase();
+            if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('box')) {
+                isClickable = true;
+            }
+
+            if (isClickable) {
+                let txt = getNodeText(node);
+                if (!txt) {
+                    txt = extractCocosTexts(node).map(t => t.text).join(' ');
+                }
+                const worldPos = getNodeWorldPos(node);
+                results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name });
             }
 
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -775,12 +828,7 @@ No explanations, no markdown fences.`;
         if (!node) return false;
         try {
             const cc = win.cc;
-            let worldPos = { x: node.x || 0, y: node.y || 0 };
-            try {
-                if (typeof node.convertToWorldSpaceAR === 'function' && cc?.v2) {
-                    worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
-                }
-            } catch (e) {}
+            const worldPos = getNodeWorldPos(node);
 
             const mockTouch = {
                 getLocation: () => ({ x: worldPos.x, y: worldPos.y }),
@@ -799,7 +847,12 @@ No explanations, no markdown fences.`;
                 isStopped: () => false
             };
 
-            // 1. Kích hoạt Button component (Bắt buộc _pressed = true theo mã nguồn Cocos Creator)
+            // 1. Cocos2d-html5 MenuItem activate
+            if (typeof node.activate === 'function') {
+                try { node.activate(); } catch (e) {}
+            }
+
+            // 2. Cocos Creator Button component (Bắt buộc _pressed = true theo mã nguồn Cocos Creator)
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 const btn = node.getComponent(cc.Button);
                 if (btn) {
@@ -819,7 +872,20 @@ No explanations, no markdown fences.`;
                 }
             }
 
-            // 2. Kích hoạt Event Emitter trên Node
+            // 3. Cocos2d-html5 Event Manager touch dispatch
+            if (cc?.eventManager) {
+                try {
+                    if (typeof cc.eventManager.dispatchEvent === 'function' && cc.EventTouch) {
+                        const touchEvt = new cc.EventTouch([mockTouch]);
+                        touchEvt.setEventCode(cc.EventTouch.EventCode.BEGAN);
+                        cc.eventManager.dispatchEvent(touchEvt);
+                        touchEvt.setEventCode(cc.EventTouch.EventCode.ENDED);
+                        cc.eventManager.dispatchEvent(touchEvt);
+                    }
+                } catch (e) {}
+            }
+
+            // 4. Kích hoạt Event Emitter trên Node
             if (typeof node.emit === 'function') {
                 const startEvt = { ...mockEvent, type: 'touchstart' };
                 node.emit('touchstart', startEvt);
@@ -827,12 +893,12 @@ No explanations, no markdown fences.`;
                 node.emit('click', mockEvent);
             }
 
-            // 3. Dispatch Native Mouse/Pointer/Touch qua Canvas DOM
-            const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');
+            // 5. Dispatch Native Mouse/Pointer/Touch qua Canvas DOM
+            const canvas = document.getElementById('gameCanvas') || document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
-                let canvasW = canvas.width;
-                let canvasH = canvas.height;
+                let canvasW = canvas.width || 1000;
+                let canvasH = canvas.height || 600;
                 if (cc?.view?.getVisibleSize) {
                     const vis = cc.view.getVisibleSize();
                     if (vis?.width && vis?.height) {
@@ -847,8 +913,8 @@ No explanations, no markdown fences.`;
                 dispatchCanvasClick(canvas, clientX, clientY);
             }
             return true;
-        } catch (err) {
-            console.warn('[YANZIOE Cocos] click error:', err);
+        } catch (e) {
+            console.warn('[YANZIOE clickCocosNode error]', e);
         }
         return false;
     }
@@ -1119,6 +1185,71 @@ No explanations, no markdown fences.`;
         target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     }
 
+    /* ================= 3B. GHÉP CÂU / WORD REORDERING (BẠCH TUỘC THU NGỌC) ================= */
+    async function solveCocosWordReordering(scene) {
+        if (!scene) return false;
+        try {
+            const clickables = findCocosClickables(scene);
+            const wordBlocks = [];
+            let answerBtn = null;
+
+            for (const c of clickables) {
+                const nameLower = (c.name || '').toLowerCase();
+                const t = c.text.trim();
+                const tLower = t.toLowerCase();
+                if (nameLower.includes('ans') || nameLower.includes('submit') || tLower === 'answer' || tLower === 'trả lời') {
+                    answerBtn = c;
+                    continue;
+                }
+                if (t.length > 0 && t.length < 50 && !['ok', 'start', 'close', 'back', 'reset', 'sound'].includes(tLower)) {
+                    wordBlocks.push(c);
+                }
+            }
+
+            if (wordBlocks.length < 3) return false;
+
+            // Thu thập text của các block để xác định câu cần ghép
+            const words = wordBlocks.map(b => b.text.trim());
+            const promptContext = words.join(' ');
+            const meta = await IOE.question?.solveQuestion(null, promptContext, words);
+            if (!meta || !meta.answer) return false;
+
+            const targetWords = String(meta.answer).trim().split(/\s+/);
+            const usedBlocks = new Set();
+            let clickedCount = 0;
+
+            for (const tw of targetWords) {
+                const cleanTarget = tw.toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (!cleanTarget) continue;
+
+                const block = wordBlocks.find(b => {
+                    if (usedBlocks.has(b)) return false;
+                    const cleanBlock = b.text.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    return cleanBlock === cleanTarget;
+                });
+
+                if (block) {
+                    await clickCocosNode(block.node);
+                    usedBlocks.add(block);
+                    clickedCount++;
+                    await IOE.delay?.(250);
+                }
+            }
+
+            if (clickedCount >= 3) {
+                if (answerBtn) {
+                    await IOE.delay?.(350);
+                    await clickCocosNode(answerBtn.node);
+                    IOE.toast('🎉 Đã bấm ANSWER hoàn tất Ghép câu!', 1500);
+                }
+                return true;
+            }
+        } catch (e) {
+            console.warn('[YANZIOE solveCocosWordReordering error]', e);
+        }
+        return false;
+    }
+
     /* ================= 4. UNIFIED CANVAS SOLVER ================= */
     async function solveCanvasGame() {
         // Quét bộ nhớ Cocos2d để trích xuất Key gốc từ RAM
@@ -1139,11 +1270,15 @@ No explanations, no markdown fences.`;
                 }
             }
 
-            // 1. Thử giải dạng bài Cloze Passage trước
+            // 1. Thử giải dạng bài Cloze Passage ("Lâu đài trên mây")
             const clozeSuccess = await solveCocosClozePassage(cocosScene);
             if (clozeSuccess) return true;
 
-            // 2. Thử giải dạng trắc nghiệm thông thường (Single Multiple-Choice) hoặc ô điền từ
+            // 2. Thử giải dạng Ghép câu / Word Reordering ("Bạch tuộc thu ngọc")
+            const reorderSuccess = await solveCocosWordReordering(cocosScene);
+            if (reorderSuccess) return true;
+
+            // 3. Thử giải dạng trắc nghiệm thông thường (Single Multiple-Choice) hoặc ô điền từ
             const cocosTexts = extractCocosTexts(cocosScene);
             if (cocosTexts.length > 0) {
                 const rawStrings = cocosTexts.map(t => t.text);
