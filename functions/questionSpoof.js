@@ -219,21 +219,30 @@ Question: ${qText}${optsText}`;
     };
 
     function parsePacket(data) {
-        if (!data) return;
-        const list = Array.isArray(data) ? data : (data.data || data.Questions || data.items || []);
-        if (Array.isArray(list) && list.length > 0) {
-            list.forEach(q => {
-                const id = q.Id || q.id || q.QuestionId;
-                if (id) {
-                    IOE.state.questions.set(String(id), q);
-                    const rawKey = q.Answer || q.Key || q.CorrectAnswer;
-                    if (rawKey) {
-                        IOE.state.correctAnswers.set(String(id), String(rawKey));
-                        IOE.toast(`🔓 Bắt được Key gốc: ${rawKey}`, 1800);
-                    }
-                }
-            });
+        if (!data || typeof data !== 'object') return;
+        function traverse(obj) {
+            if (!obj || typeof obj !== 'object') return;
+            if (Array.isArray(obj)) {
+                obj.forEach(traverse);
+                return;
+            }
+            const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;
+            const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;
+            const rawKey = obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn;
+
+            if (id && rawKey) {
+                IOE.state.correctAnswers.set(String(id), String(rawKey));
+                IOE.toast(`🔓 Bắt được Key gốc: ${rawKey}`, 1800);
+            }
+            if (content && rawKey) {
+                IOE.state.correctAnswers.set(String(content).trim(), String(rawKey));
+            }
+
+            for (const k of Object.keys(obj)) {
+                traverse(obj[k]);
+            }
         }
+        traverse(data);
     }
 
     IOE.question = {

@@ -5,7 +5,6 @@
     if (!IOE) return;
 
     /* ================= 1. COCOS2D-JS / COCOS CREATOR ENGINE ================= */
-    // IOE games like "Lâu đài trên mây", "Thủ môn bắt bóng", v.v. sử dụng Cocos2d-JS
     function getCocosScene() {
         try {
             const cc = win.cc;
@@ -16,18 +15,16 @@
         return null;
     }
 
-    // Đệ quy quét toàn bộ text trong cây đối tượng Cocos2d
-    function extractCocosTexts(node, maxDepth = 10, curDepth = 0) {
+    function extractCocosTexts(node, maxDepth = 12, curDepth = 0) {
         if (!node || curDepth > maxDepth) return [];
         const results = [];
         try {
-            // 1. Kiểm tra Label Component
             let labelComp = null;
             if (typeof node.getComponent === 'function') {
                 const cc = win.cc;
-                if (cc && cc.Label) labelComp = node.getComponent(cc.Label);
-                if (!labelComp && cc && cc.RichText) labelComp = node.getComponent(cc.RichText);
-                if (!labelComp && cc && cc.EditBox) labelComp = node.getComponent(cc.EditBox);
+                if (cc?.Label) labelComp = node.getComponent(cc.Label);
+                if (!labelComp && cc?.RichText) labelComp = node.getComponent(cc.RichText);
+                if (!labelComp && cc?.EditBox) labelComp = node.getComponent(cc.EditBox);
             }
 
             const strVal = labelComp?.string || node._string || node.string;
@@ -38,7 +35,6 @@
                 }
             }
 
-            // 2. Quét các node con
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
             for (const child of children) {
                 results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));
@@ -47,8 +43,7 @@
         return results;
     }
 
-    // Tìm các nút bấm có thể click được trong Cocos2d
-    function findCocosClickables(node, maxDepth = 10, curDepth = 0) {
+    function findCocosClickables(node, maxDepth = 12, curDepth = 0) {
         if (!node || curDepth > maxDepth) return [];
         const results = [];
         try {
@@ -70,12 +65,11 @@
         return results;
     }
 
-    // Kích hoạt click vào một Node trong Cocos2d
     function clickCocosNode(node) {
         if (!node) return false;
         try {
             const cc = win.cc;
-            // Cách 1: Kích hoạt Button component
+            // 1. Button component
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 const btn = node.getComponent(cc.Button);
                 if (btn) {
@@ -91,30 +85,30 @@
                 }
             }
 
-            // Cách 2: Bắn Event TOUCH_END trên Node
+            // 2. Event emitter
             if (typeof node.emit === 'function') {
                 node.emit('touchend');
                 node.emit('click');
                 return true;
             }
 
-            // Cách 3: Dispatch native touch / mouse qua canvas
+            // 3. Canvas coordinates
             const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas');
             if (canvas && typeof node.convertToWorldSpaceAR === 'function') {
                 const worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
                 const rect = canvas.getBoundingClientRect();
                 const clientX = rect.left + worldPos.x;
-                const clientY = rect.bottom - worldPos.y; // Cocos trục Y từ dưới lên
+                const clientY = rect.bottom - worldPos.y;
                 dispatchCanvasClick(canvas, clientX, clientY);
                 return true;
             }
         } catch (err) {
-            console.warn('[YANZIOE Cocos] clickCocosNode error:', err);
+            console.warn('[YANZIOE Cocos] click error:', err);
         }
         return false;
     }
 
-    /* ================= 2. CREATEJS / EASELJS CANVAS ENGINE ================= */
+    /* ================= 2. CREATEJS CANVAS ENGINE ================= */
     function getStageAndRoot() {
         const stage = win.stage || win.exportRoot?.stage || null;
         const root = win.exportRoot || null;
@@ -166,7 +160,7 @@
         return false;
     }
 
-    /* ================= 3. DISPATCH CANVAS CLICK / KEYBOARD ================= */
+    /* ================= 3. DISPATCH CANVAS CLICK & KEYBOARD ================= */
     function dispatchCanvasClick(canvas, x, y) {
         if (!canvas) return;
         const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y };
@@ -190,23 +184,36 @@
 
     /* ================= 4. UNIFIED CANVAS SOLVER ================= */
     async function solveCanvasGame() {
-        // 1. Kiểm tra Cocos2d-JS Engine
+        // 1. Cocos2d-JS Engine
         const cocosScene = getCocosScene();
         if (cocosScene) {
+            const clickables = findCocosClickables(cocosScene);
+
+            // Bắt đầu nhanh nếu gặp nút START / OK / BẮT ĐẦU
+            for (const c of clickables) {
+                const t = c.text.toLowerCase();
+                if (t === 'ok' || t === 'start' || t.includes('bắt đầu') || t.includes('bắt đẩu')) {
+                    clickCocosNode(c.node);
+                    IOE.toast('🚀 Tự động click bắt đầu bài thi Cocos2d!', 1500);
+                    await IOE.delay?.(1000);
+                    break;
+                }
+            }
+
             const cocosTexts = extractCocosTexts(cocosScene);
             if (cocosTexts.length > 0) {
                 const rawStrings = cocosTexts.map(t => t.text);
-                console.log('[YANZIOE Cocos] Scanned texts:', rawStrings);
                 const questionText = rawStrings.join(' ');
-                IOE.toast(`🎮 Bắt được Minigame Cocos2d: ${rawStrings[0]}`, 1500);
+                IOE.toast(`🎮 Quét được ${cocosTexts.length} phần tử Cocos2d`, 1200);
 
                 const meta = await IOE.question?.solveQuestion(null, questionText, rawStrings);
                 if (meta?.answer) {
-                    const clickables = findCocosClickables(cocosScene);
-                    for (const c of clickables) {
-                        if (c.text.toLowerCase().includes(String(meta.answer).toLowerCase())) {
+                    const ansLower = String(meta.answer).trim().toLowerCase();
+                    const updatedClickables = findCocosClickables(cocosScene);
+                    for (const c of updatedClickables) {
+                        if (c.text.toLowerCase().includes(ansLower)) {
                             clickCocosNode(c.node);
-                            IOE.toast(`⚡ Đã tự click đáp án: ${meta.answer}`, 1500);
+                            IOE.toast(`⚡ Đã tự click đáp án Cocos2d: ${meta.answer}`, 1500);
                             return true;
                         }
                     }
@@ -216,7 +223,7 @@
             }
         }
 
-        // 2. Kiểm tra CreateJS / EaselJS
+        // 2. CreateJS / EaselJS
         const { stage, root } = getStageAndRoot();
         if (root) {
             const texts = extractCreateJSTexts(root);

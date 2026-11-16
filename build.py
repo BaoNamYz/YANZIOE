@@ -11,10 +11,10 @@ VERSION_FILE = ROOT / 'VERSION.txt'
 def get_version():
     if VERSION_FILE.exists():
         return VERSION_FILE.read_text(encoding='utf-8').strip()
-    return '1.0.2'
+    return '1.0.3'
 
 VERSION = get_version()
-print(f"=== Building YANZIOE VIP v{VERSION} (Cocos2d + CreateJS + DOM) ===")
+print(f"=== Building YANZIOE VIP v{VERSION} (Full Cocos2d + CreateJS + DOM + Glassmorphism UI) ===")
 
 MODULES = [
     'utils/utils.js',
@@ -47,7 +47,7 @@ def make_userscript_header(ver, is_coke=False):
     title = "YANZIOE VIP (CoKey)" if is_coke else "YANZIOE VIP"
     desc = "Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM)"
     if is_coke:
-        desc += " - Bản Free/CoKey không cần nhập API Key"
+        desc += " - Bản VIP Glassmorphism không cần nhập API Key"
     return f"""// ==UserScript==
 // @name         {title} - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
@@ -58,11 +58,17 @@ def make_userscript_header(ver, is_coke=False):
 // @match        *://*.ioe.vn/*
 // @match        *://*.go.vn/*
 // @match        *://*.vtc.vn/*
+// @match        *://api-edu.go.vn/*
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @connect      api-edu.go.vn
+// @connect      ioe.vn
+// @connect      api.groq.com
+// @connect      generativelanguage.googleapis.com
+// @connect      openrouter.ai
 // @noframes     false
 // ==/UserScript==
 
@@ -96,13 +102,24 @@ def write_extension_dir(target_dir, code, name_suffix=""):
                     "*://ioe.vn/*",
                     "*://*.ioe.vn/*",
                     "*://*.go.vn/*",
-                    "*://*.vtc.vn/*"
+                    "*://*.vtc.vn/*",
+                    "*://api-edu.go.vn/*"
                 ],
                 "js": ["content.js"],
                 "run_at": "document_start",
                 "world": "MAIN",
                 "all_frames": True
             }
+        ],
+        "host_permissions": [
+            "*://ioe.vn/*",
+            "*://*.ioe.vn/*",
+            "*://*.go.vn/*",
+            "*://*.vtc.vn/*",
+            "*://api-edu.go.vn/*",
+            "https://api.groq.com/*",
+            "https://generativelanguage.googleapis.com/*",
+            "https://openrouter.ai/*"
         ],
         "permissions": ["activeTab", "scripting"]
     }
@@ -144,12 +161,12 @@ zip_dest = DOWNLOADS_DIR / f'YANZIOE_v{VERSION}_CoKey_VIP.zip'
 pack_folder_zip(dist_release_dir, zip_dest)
 print(f"[OK] Packaged ZIP release to {zip_dest}")
 
-# Clean up older versions in Downloads
-for old_item in list(DOWNLOADS_DIR.glob('YANZIOE_v1.0.1*')):
-    if old_item.is_dir():
+# Safe clean of previous version packages in Downloads (never touch the repo folder)
+for old_item in list(DOWNLOADS_DIR.glob('YANZIOE_v*')):
+    if old_item.is_dir() and old_item.name != f'YANZIOE_v{VERSION}_CoKey':
         shutil.rmtree(old_item, ignore_errors=True)
         print(f"[CLEAN] Removed old version folder: {old_item.name}")
-    elif old_item.is_file():
+    elif old_item.is_file() and old_item.name != f'YANZIOE_v{VERSION}_CoKey_VIP.zip':
         old_item.unlink(missing_ok=True)
         print(f"[CLEAN] Removed old version zip: {old_item.name}")
 
