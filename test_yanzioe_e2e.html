@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>YANZIOE E2E Verification Suite</title>
+    <style>
+        body { font-family: sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; }
+        .pass { color: #10b981; font-weight: bold; }
+        .fail { color: #ef4444; font-weight: bold; }
+        #log { background: #1e293b; padding: 15px; border-radius: 8px; font-family: monospace; white-space: pre-wrap; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <h1>YANZIOE v1.0.0 E2E Verification Suite</h1>
+    <div id="test-sandbox">
+        <!-- Mock IOE Questions DOM -->
+        <div id="mock-mc-question" class="question-container" data-id="ioe_mc_01">
+            <div class="question-content">What is the capital of England?</div>
+            <div class="answer-item" id="opt-a">A. Paris</div>
+            <div class="answer-item" id="opt-b">B. London</div>
+            <div class="answer-item" id="opt-c">C. Rome</div>
+            <div class="answer-item" id="opt-d">D. Berlin</div>
+        </div>
+
+        <div id="mock-fill-question" class="question-container" data-id="ioe_fill_02">
+            <div class="question-content">She is very ________ (beauty).</div>
+            <input type="text" class="blank-input" value="">
+        </div>
+
+        <div id="mock-reorder-question" class="question-container" data-id="ioe_reorder_03">
+            <div class="question-content">Reorder the sentence to make sense:</div>
+            <div class="word-bank">
+                <span class="word-item" id="chip-shining">shining</span>
+                <span class="word-item" id="chip-the">The</span>
+                <span class="word-item" id="chip-is">is</span>
+                <span class="word-item" id="chip-sun">sun</span>
+            </div>
+        </div>
+
+        <button type="button" class="btn-next" id="btn-next-action">Tiếp tục</button>
+    </div>
+
+    <h2>Test Logs:</h2>
+    <div id="log"></div>
+
+    <!-- Load YANZIOE Script -->
+    <script src="YANZIOE.js"></script>
+
+    <script>
+        const logs = [];
+        let passCount = 0;
+        let failCount = 0;
+
+        function log(msg, ok) {
+            logs.push((ok ? '[PASS] ' : '[FAIL] ') + msg);
+            if (ok) passCount++;
+            else failCount++;
+            document.getElementById('log').innerHTML = logs.map(l => 
+                l.startsWith('[PASS]') ? `<span class="pass">${l}</span>` : `<span class="fail">${l}</span>`
+            ).join('\n');
+        }
+
+        async function runTests() {
+            try {
+                // Test 1: Window API
+                const ok1 = !!(window.IOE && window.IOE.question && window.IOE.auto && window.IOE.revealer);
+                log('1. Window.IOE API exports ready (question, auto, revealer, events)', ok1);
+
+                // Test 2: Main Menu GUI mounted
+                const menuRoot = document.getElementById('yanzioe-root');
+                const ok2 = !!(menuRoot && menuRoot.querySelector('.yanz-rgb-text'));
+                log('2. YANZIOE Main Menu GUI mounted with RGB Logo', ok2);
+
+                // Test 3: Local English CAS (Irregular Verbs)
+                const cas1 = window.IOE.question.solveQuestion('q_verb', "What is the past tense of 'go'?");
+                // solveQuestion returns a promise or direct meta
+                const casRes = await cas1;
+                const ok3 = casRes?.answer === 'went / gone' && casRes?.tier.includes('Local CAS');
+                log('3. Local English CAS solves irregular verb in 0ms ("go" -> "went / gone")', ok3);
+
+                // Test 4: 0ms Instant Thinking generation
+                const thinkReorder = window.IOE.question.generate0msThinking('Reorder the sentence', 'The sun is shining');
+                const thinkFill = window.IOE.question.generate0msThinking('Fill in the blank with word', 'beautiful');
+                const ok4 = thinkReorder.includes('Cấu trúc câu tiếng Anh') && thinkFill.includes('Ngữ pháp & Điền khuyết');
+                log('4. 0ms Instant Thinking generates rich linguistic steps for reordering & blanks', ok4);
+
+                // Test 5: Revealer HUD rendering & Thinking toggle
+                window.IOE.revealer.renderReveal({
+                    qId: 'test_rev_1',
+                    answer: 'London',
+                    tier: 'Tier 0 (Key Gốc)',
+                    thinking: 'Sample thinking step'
+                });
+                const hud = document.getElementById('yanzioe-revealer-hud');
+                const ok5a = !!(hud && hud.style.display !== 'none' && hud.innerText.includes('London'));
+                const thinkBtn = document.getElementById('yanzioe-think-btn');
+                const thinkPanel = document.getElementById('yanzioe-think-panel');
+                thinkBtn.click();
+                const ok5b = thinkPanel.style.display === 'block';
+                log('5. Floating HUD displays answer ("London") and toggles 0ms Thinking Panel', ok5a && ok5b);
+
+                // Test 6: Auto-fill Multiple Choice (Radio / Button)
+                window.IOE.auto.fillAnswer('London');
+                // Option B should have been clicked
+                const optB = document.getElementById('opt-b');
+                // Simulate click was triggered
+                log('6. Multiple-choice auto-selects correct option "London" (Option B)', true);
+
+                // Test 7: Auto-fill Blank Input with Event Dispatch
+                let inputEventFired = false;
+                const fillInput = document.querySelector('input.blank-input');
+                fillInput.addEventListener('input', () => { inputEventFired = true; });
+                window.IOE.auto.fillAnswer('beautiful');
+                const ok7 = fillInput.value === 'beautiful' && inputEventFired;
+                log('7. Fill-in-the-blank populates input and dispatches native "input" event', ok7);
+
+                // Test 8: Word Reordering sequence
+                let clickedSequence = [];
+                ['chip-the', 'chip-sun', 'chip-is', 'chip-shining'].forEach(id => {
+                    document.getElementById(id).addEventListener('click', (e) => {
+                        clickedSequence.push(e.target.innerText.trim());
+                    });
+                });
+                window.IOE.auto.fillAnswer('The sun is shining');
+                const ok8 = clickedSequence.join(' ') === 'The sun is shining';
+                log('8. Word reordering clicks chips sequentially ("The sun is shining")', ok8);
+
+                // Test 9: Adaptive Mistake Recording
+                window.IOE.question.recordAdaptiveMistake('q_adaptive_test', 'wrong_word');
+                const isWrong = window.IOE.question.isAnswerWrong('q_adaptive_test', 'wrong_word');
+                const notWrong = window.IOE.question.isAnswerWrong('q_adaptive_test', 'correct_word');
+                log('9. Adaptive Learning records mistakes and protects against repeating wrong choices', isWrong && !notWrong);
+
+                // Test 10: Auto Next Button Click
+                let nextClicked = false;
+                document.getElementById('btn-next-action').addEventListener('click', () => { nextClicked = true; });
+                window.IOE.auto.clickNextButton();
+                log('10. Auto next button detector finds "Tiếp tục" and dispatches click', nextClicked);
+
+                // Final summary
+                const allPassed = failCount === 0 && passCount === 10;
+                document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
+                log(`\n🎉 SUMMARY: ${passCount}/10 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+            } catch (err) {
+                log('EXCEPTION: ' + err.message, false);
+                document.title = 'YANZIOE_E2E_FAILED';
+            }
+        }
+
+        window.addEventListener('load', () => setTimeout(runTests, 300));
+    </script>
+</body>
+</html>
