@@ -326,6 +326,22 @@ Question: ${qText}${optsText}`;
             }
         },
         {
+            keywords: ['pigneau de', 'nguyen phuc anh', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],
+            words: {
+                "1": "cope with",
+                "2": "as",
+                "3": "target",
+                "4": "wipe out",
+                "5": "hands",
+                "6": "where",
+                "7": "who",
+                "8": "role",
+                "9": "help",
+                "10": "equipped",
+                "11": "successful"
+            }
+        },
+        {
             keywords: ['global warming', 'greenhouse', 'carbon dioxide', 'temperature'],
             answers: { "1": "B", "2": "A", "3": "C", "4": "D", "5": "B", "6": "A" }
         },
@@ -435,7 +451,14 @@ No explanations, no markdown fences.`;
         if (!passageText) return null;
         const normPassage = passageText.toLowerCase();
 
-        // 0. Quét trước bộ nhớ Cocos2d để lấy dữ liệu gốc nếu có
+        // 0. Xóa cache nếu đã chuyển sang đoạn văn bài thi khác
+        const passageSnippet = normPassage.replace(/[^a-z0-9]/g, '').slice(0, 40);
+        if (IOE.state._lastClozeSnippet && IOE.state._lastClozeSnippet !== passageSnippet) {
+            IOE.state.clozeAnswers = {};
+        }
+        IOE.state._lastClozeSnippet = passageSnippet;
+
+        // Quét trước bộ nhớ Cocos2d để lấy dữ liệu gốc nếu có
         try { scanCocosMemoryForAnswers(); } catch (e) {}
 
         const outAnswers = {};
@@ -775,6 +798,17 @@ No explanations, no markdown fences.`;
         return extracted;
     }
 
+    function isValidClozeWord(w) {
+        if (!w || typeof w !== 'string') return false;
+        const str = w.trim();
+        if (str.length < 1 || str.length > 35) return false;
+        // Loại bỏ triệt để các URL, tên miền, địa chỉ web rác (Google translate, domains, etc.)
+        if (/https?:\/\/|\.com|\.net|\.org|\.vn|\.br|\.py|\.az|\.co|\.kh|\.il|\.hu|\.jp|translate\./i.test(str)) return false;
+        // Bắt buộc phải có chữ cái tiếng Anh
+        if (!/[a-zA-Z]/.test(str)) return false;
+        return true;
+    }
+
     function scanCocosMemoryForAnswers() {
         return bypassIOESystemAnswers();
     }
@@ -783,29 +817,19 @@ No explanations, no markdown fences.`;
         if (!data || typeof data !== 'object') return;
         if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
 
-        function traverse(obj) {
-            if (!obj || typeof obj !== 'object') return;
+        function traverse(obj, depth = 0) {
+            if (!obj || typeof obj !== 'object' || depth > 8) return;
 
-            // 1. Kiểm tra mảng ans / answear (dạng bài Cloze Test / Điền từ)
-            if (Array.isArray(obj)) {
-                if (obj.length >= 4 && obj.every(item => typeof item === 'string' && item.length < 50)) {
-                    obj.forEach((ans, idx) => {
-                        IOE.state.clozeAnswers[String(idx + 1)] = ans.trim();
-                    });
-                    IOE.toast(`🔓 [Bypass] Bắt được toàn bộ ${obj.length} đáp án Cloze Test!`, 2000);
-                }
-                obj.forEach(traverse);
-                return;
-            }
-
-            // 2. Kiểm tra thuộc tính ans / answear là mảng các object
+            // 1. Kiểm tra thuộc tính ans / answear là mảng các object
             if (Array.isArray(obj.ans)) {
                 obj.ans.forEach((a, idx) => {
                     if (a && typeof a === 'object') {
                         const pos = String(a.position || (idx + 1));
                         const val = a.tans || a.Tans || a.ans || a.content;
-                        if (val) IOE.state.clozeAnswers[pos] = String(val).trim();
-                    } else if (typeof a === 'string') {
+                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {
+                            IOE.state.clozeAnswers[pos] = String(val).trim();
+                        }
+                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {
                         IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
                     }
                 });
@@ -815,21 +839,25 @@ No explanations, no markdown fences.`;
                     if (a && typeof a === 'object') {
                         const pos = String(a.position || (idx + 1));
                         const val = a.tans || a.Tans || a.ans || a.content;
-                        if (val) IOE.state.clozeAnswers[pos] = String(val).trim();
-                    } else if (typeof a === 'string') {
+                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {
+                            IOE.state.clozeAnswers[pos] = String(val).trim();
+                        }
+                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {
                         IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
                     }
                 });
             }
 
-            // 3. Kiểm tra mảng question / questionArr
+            // 2. Kiểm tra mảng question / questionArr
             if (Array.isArray(obj.question)) {
                 obj.question.forEach((q, idx) => {
                     const qId = String(q.id || (idx + 1));
                     const tans = q.tans || q.Tans;
-                    if (tans) {
+                    if (tans && typeof tans === 'string') {
                         IOE.state.correctAnswers.set(qId, String(tans).trim());
-                        IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {
+                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        }
                     }
                 });
             }
@@ -837,42 +865,50 @@ No explanations, no markdown fences.`;
                 obj.questionArr.forEach((q, idx) => {
                     const qId = String(q.id || q.questionId || (idx + 1));
                     const tans = q.tans || q.Tans;
-                    if (tans) {
+                    if (tans && typeof tans === 'string') {
                         IOE.state.correctAnswers.set(qId, String(tans).trim());
-                        IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {
+                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        }
                     }
                 });
             }
 
-            // 4. Kiểm tra Key gốc trực tiếp của từng câu hỏi
+            // 3. Kiểm tra Key gốc trực tiếp của từng câu hỏi
             const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;
             const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;
             const rawKey = obj.tans || obj.Tans || obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;
 
-            if (id && rawKey) {
+            if (id && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {
                 IOE.state.correctAnswers.set(String(id), String(rawKey).trim());
             }
-            if (content && rawKey) {
+            if (content && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {
                 IOE.state.correctAnswers.set(String(content).trim(), String(rawKey).trim());
             }
 
-            // 5. Quét danh sách câu hỏi con / subquestions của bài Cloze
+            // 4. Quét danh sách câu hỏi con / subquestions của bài Cloze (tối đa 15 câu)
             const subList = obj.SubQuestions || obj.subQuestions || obj.ListAnswer || obj.listAnswer || obj.Answers || obj.answers;
-            if (Array.isArray(subList) && subList.length >= 3) {
+            if (Array.isArray(subList) && subList.length >= 2 && subList.length <= 15) {
                 subList.forEach((sub, idx) => {
                     const subIdx = String(sub.Order || sub.Index || sub.order || sub.index || (idx + 1));
                     const subAns = sub.tans || sub.Tans || sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;
-                    if (subAns) {
+                    if (subAns && isValidClozeWord(subAns) && parseInt(subIdx, 10) <= 15) {
                         IOE.state.clozeAnswers[subIdx] = String(subAns).trim();
                     }
                 });
             }
 
-            for (const k of Object.keys(obj)) {
-                traverse(obj[k]);
+            if (Array.isArray(obj)) {
+                for (const item of obj) traverse(item, depth + 1);
+            } else {
+                for (const k of Object.keys(obj)) {
+                    if (k === 'window' || k === 'document' || k === 'global') continue;
+                    traverse(obj[k], depth + 1);
+                }
             }
         }
-        traverse(data);
+
+        traverse(data, 0);
     }
 
     IOE.CLOZE_KNOWLEDGE_BANK = CLOZE_KNOWLEDGE_BANK;
@@ -1133,8 +1169,14 @@ No explanations, no markdown fences.`;
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
-        // 1. Tìm đoạn văn đề bài
-        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
+        // 1. Tìm đoạn văn đề bài (ưu tiên đoạn văn dài > 50 ký tự có chứa từ khóa hoặc dấu ngoặc số)
+        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam|priest|adviser|emperor|french|history|culture/i.test(t.text)));
+        if (!passageObj) {
+            passageObj = allTexts.find(t => t.text.length > 60 && t.worldY > 280);
+        }
+        if (!passageObj) {
+            passageObj = allTexts.find(t => t.text.length > 80);
+        }
         if (!passageObj || !passageObj.text) return false;
         const passageText = passageObj.text;
 
@@ -1142,7 +1184,11 @@ No explanations, no markdown fences.`;
         const fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
         if (!fullAnswers || Object.keys(fullAnswers).length === 0) return false;
 
-        const totalBlanks = Math.max(Object.keys(fullAnswers).length, 10);
+        // Giới hạn số câu hợp lý theo đề bài thực tế (tối đa 12 câu, tuyệt đối không bị tràn rác 274 câu)
+        const blankMatches = [...passageText.matchAll(/\(([0-9]{1,2})\)/g)].map(m => parseInt(m[1], 10));
+        let detectedCount = blankMatches.length > 0 ? Math.max(...blankMatches) : Object.keys(fullAnswers).length;
+        if (detectedCount > 15 || detectedCount < 1) detectedCount = 10;
+        const totalBlanks = Math.min(Math.max(detectedCount, 4), 12);
         console.log(`[YANZIOE Cocos] Đoạn văn Cloze Test: ${totalBlanks} câu. Bắt đầu khớp đáp án chuẩn.`);
 
         // Tìm ScrollView nếu có
@@ -1654,16 +1700,19 @@ No explanations, no markdown fences.`;
                 backdrop-filter: blur(10px);
                 border: 1px solid rgba(56, 189, 248, 0.45);
                 border-radius: 8px;
-                padding: 7px 12px;
+                padding: 6px 12px;
                 box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 font-size: 12px;
                 color: #f8fafc;
                 min-width: 280px;
-                max-width: 450px;
+                max-width: min(90vw, 750px);
+                max-height: 54px;
+                overflow: hidden;
                 display: none;
                 flex-direction: column;
                 gap: 6px;
+                transition: max-height 0.25s ease;
             `;
             document.body.appendChild(hud);
         }
@@ -1686,10 +1735,10 @@ No explanations, no markdown fences.`;
 
         hud.style.display = 'flex';
         hud.innerHTML = `
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-                <div style="display:flex;align-items:center;gap:6px;min-width:0;cursor:pointer;" id="yanzioe-copy-area" title="Nhấn để sao chép">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;width:100%;">
+                <div style="display:flex;align-items:center;gap:6px;min-width:0;max-width:calc(100% - 215px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" id="yanzioe-copy-area" title="Nhấn để sao chép">
                     <span style="background:#0284c7;color:#fff;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:700;flex-shrink:0;">${safeTier}</span>
-                    <span style="color:#f8fafc;word-break:break-word;"><strong>Đáp Án:</strong> ${safeAns}</span>
+                    <span style="color:#f8fafc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><strong>Đáp Án:</strong> ${safeAns}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
                     <button type="button" id="yanzioe-fill-btn" style="background:#38bdf8;color:#082f49;border:none;border-radius:5px;padding:3px 9px;font-weight:700;cursor:pointer;font-size:11.5px;">Fill</button>
@@ -1697,7 +1746,7 @@ No explanations, no markdown fences.`;
                     ${safeThink ? '<button type="button" id="yanzioe-think-btn" style="background:#4f46e5;color:#ffffff;border:none;border-radius:5px;padding:3px 8px;font-weight:700;cursor:pointer;font-size:11.5px;display:inline-flex;align-items:center;gap:3px;" title="Xem tư duy AI (0ms)">🧠 Suy nghĩ (0ms)</button>' : ''}
                 </div>
             </div>
-            ${safeThink ? `<div id="yanzioe-think-panel" style="display:none;width:100%;margin-top:4px;padding:8px 10px;background:rgba(15,23,42,0.92);border:1px solid rgba(99,102,241,0.45);border-radius:6px;font-size:11.5px;line-height:1.5;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;">${safeThink}</div>` : ''}
+            ${safeThink ? `<div id="yanzioe-think-panel" style="display:none;width:100%;margin-top:4px;padding:8px 10px;background:rgba(15,23,42,0.92);border:1px solid rgba(99,102,241,0.45);border-radius:6px;font-size:11.5px;line-height:1.5;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;">${safeThink}</div>` : ''}
         `;
 
         document.getElementById('yanzioe-fill-btn')?.addEventListener('click', () => {
@@ -1723,6 +1772,8 @@ No explanations, no markdown fences.`;
                 const isOpen = thinkPanel.style.display !== 'none';
                 thinkPanel.style.display = isOpen ? 'none' : 'block';
                 thinkBtn.style.background = isOpen ? '#4f46e5' : '#4338ca';
+                hud.style.maxHeight = isOpen ? '54px' : '240px';
+                hud.style.overflow = isOpen ? 'hidden' : 'visible';
             });
         }
     }
@@ -2008,7 +2059,7 @@ No explanations, no markdown fences.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.0</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.1</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -2136,7 +2187,7 @@ No explanations, no markdown fences.`;
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.1.0 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.1.1 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>

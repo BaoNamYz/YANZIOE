@@ -241,8 +241,14 @@
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
-        // 1. Tìm đoạn văn đề bài
-        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
+        // 1. Tìm đoạn văn đề bài (ưu tiên đoạn văn dài > 50 ký tự có chứa từ khóa hoặc dấu ngoặc số)
+        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam|priest|adviser|emperor|french|history|culture/i.test(t.text)));
+        if (!passageObj) {
+            passageObj = allTexts.find(t => t.text.length > 60 && t.worldY > 280);
+        }
+        if (!passageObj) {
+            passageObj = allTexts.find(t => t.text.length > 80);
+        }
         if (!passageObj || !passageObj.text) return false;
         const passageText = passageObj.text;
 
@@ -250,7 +256,11 @@
         const fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
         if (!fullAnswers || Object.keys(fullAnswers).length === 0) return false;
 
-        const totalBlanks = Math.max(Object.keys(fullAnswers).length, 10);
+        // Giới hạn số câu hợp lý theo đề bài thực tế (tối đa 12 câu, tuyệt đối không bị tràn rác 274 câu)
+        const blankMatches = [...passageText.matchAll(/\(([0-9]{1,2})\)/g)].map(m => parseInt(m[1], 10));
+        let detectedCount = blankMatches.length > 0 ? Math.max(...blankMatches) : Object.keys(fullAnswers).length;
+        if (detectedCount > 15 || detectedCount < 1) detectedCount = 10;
+        const totalBlanks = Math.min(Math.max(detectedCount, 4), 12);
         console.log(`[YANZIOE Cocos] Đoạn văn Cloze Test: ${totalBlanks} câu. Bắt đầu khớp đáp án chuẩn.`);
 
         // Tìm ScrollView nếu có

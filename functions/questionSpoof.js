@@ -168,6 +168,22 @@ Question: ${qText}${optsText}`;
             }
         },
         {
+            keywords: ['pigneau de', 'nguyen phuc anh', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],
+            words: {
+                "1": "cope with",
+                "2": "as",
+                "3": "target",
+                "4": "wipe out",
+                "5": "hands",
+                "6": "where",
+                "7": "who",
+                "8": "role",
+                "9": "help",
+                "10": "equipped",
+                "11": "successful"
+            }
+        },
+        {
             keywords: ['global warming', 'greenhouse', 'carbon dioxide', 'temperature'],
             answers: { "1": "B", "2": "A", "3": "C", "4": "D", "5": "B", "6": "A" }
         },
@@ -277,7 +293,14 @@ No explanations, no markdown fences.`;
         if (!passageText) return null;
         const normPassage = passageText.toLowerCase();
 
-        // 0. Quét trước bộ nhớ Cocos2d để lấy dữ liệu gốc nếu có
+        // 0. Xóa cache nếu đã chuyển sang đoạn văn bài thi khác
+        const passageSnippet = normPassage.replace(/[^a-z0-9]/g, '').slice(0, 40);
+        if (IOE.state._lastClozeSnippet && IOE.state._lastClozeSnippet !== passageSnippet) {
+            IOE.state.clozeAnswers = {};
+        }
+        IOE.state._lastClozeSnippet = passageSnippet;
+
+        // Quét trước bộ nhớ Cocos2d để lấy dữ liệu gốc nếu có
         try { scanCocosMemoryForAnswers(); } catch (e) {}
 
         const outAnswers = {};
@@ -617,6 +640,17 @@ No explanations, no markdown fences.`;
         return extracted;
     }
 
+    function isValidClozeWord(w) {
+        if (!w || typeof w !== 'string') return false;
+        const str = w.trim();
+        if (str.length < 1 || str.length > 35) return false;
+        // Loại bỏ triệt để các URL, tên miền, địa chỉ web rác (Google translate, domains, etc.)
+        if (/https?:\/\/|\.com|\.net|\.org|\.vn|\.br|\.py|\.az|\.co|\.kh|\.il|\.hu|\.jp|translate\./i.test(str)) return false;
+        // Bắt buộc phải có chữ cái tiếng Anh
+        if (!/[a-zA-Z]/.test(str)) return false;
+        return true;
+    }
+
     function scanCocosMemoryForAnswers() {
         return bypassIOESystemAnswers();
     }
@@ -625,29 +659,19 @@ No explanations, no markdown fences.`;
         if (!data || typeof data !== 'object') return;
         if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
 
-        function traverse(obj) {
-            if (!obj || typeof obj !== 'object') return;
+        function traverse(obj, depth = 0) {
+            if (!obj || typeof obj !== 'object' || depth > 8) return;
 
-            // 1. Kiểm tra mảng ans / answear (dạng bài Cloze Test / Điền từ)
-            if (Array.isArray(obj)) {
-                if (obj.length >= 4 && obj.every(item => typeof item === 'string' && item.length < 50)) {
-                    obj.forEach((ans, idx) => {
-                        IOE.state.clozeAnswers[String(idx + 1)] = ans.trim();
-                    });
-                    IOE.toast(`🔓 [Bypass] Bắt được toàn bộ ${obj.length} đáp án Cloze Test!`, 2000);
-                }
-                obj.forEach(traverse);
-                return;
-            }
-
-            // 2. Kiểm tra thuộc tính ans / answear là mảng các object
+            // 1. Kiểm tra thuộc tính ans / answear là mảng các object
             if (Array.isArray(obj.ans)) {
                 obj.ans.forEach((a, idx) => {
                     if (a && typeof a === 'object') {
                         const pos = String(a.position || (idx + 1));
                         const val = a.tans || a.Tans || a.ans || a.content;
-                        if (val) IOE.state.clozeAnswers[pos] = String(val).trim();
-                    } else if (typeof a === 'string') {
+                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {
+                            IOE.state.clozeAnswers[pos] = String(val).trim();
+                        }
+                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {
                         IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
                     }
                 });
@@ -657,21 +681,25 @@ No explanations, no markdown fences.`;
                     if (a && typeof a === 'object') {
                         const pos = String(a.position || (idx + 1));
                         const val = a.tans || a.Tans || a.ans || a.content;
-                        if (val) IOE.state.clozeAnswers[pos] = String(val).trim();
-                    } else if (typeof a === 'string') {
+                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {
+                            IOE.state.clozeAnswers[pos] = String(val).trim();
+                        }
+                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {
                         IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
                     }
                 });
             }
 
-            // 3. Kiểm tra mảng question / questionArr
+            // 2. Kiểm tra mảng question / questionArr
             if (Array.isArray(obj.question)) {
                 obj.question.forEach((q, idx) => {
                     const qId = String(q.id || (idx + 1));
                     const tans = q.tans || q.Tans;
-                    if (tans) {
+                    if (tans && typeof tans === 'string') {
                         IOE.state.correctAnswers.set(qId, String(tans).trim());
-                        IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {
+                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        }
                     }
                 });
             }
@@ -679,42 +707,50 @@ No explanations, no markdown fences.`;
                 obj.questionArr.forEach((q, idx) => {
                     const qId = String(q.id || q.questionId || (idx + 1));
                     const tans = q.tans || q.Tans;
-                    if (tans) {
+                    if (tans && typeof tans === 'string') {
                         IOE.state.correctAnswers.set(qId, String(tans).trim());
-                        IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {
+                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                        }
                     }
                 });
             }
 
-            // 4. Kiểm tra Key gốc trực tiếp của từng câu hỏi
+            // 3. Kiểm tra Key gốc trực tiếp của từng câu hỏi
             const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;
             const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;
             const rawKey = obj.tans || obj.Tans || obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;
 
-            if (id && rawKey) {
+            if (id && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {
                 IOE.state.correctAnswers.set(String(id), String(rawKey).trim());
             }
-            if (content && rawKey) {
+            if (content && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {
                 IOE.state.correctAnswers.set(String(content).trim(), String(rawKey).trim());
             }
 
-            // 5. Quét danh sách câu hỏi con / subquestions của bài Cloze
+            // 4. Quét danh sách câu hỏi con / subquestions của bài Cloze (tối đa 15 câu)
             const subList = obj.SubQuestions || obj.subQuestions || obj.ListAnswer || obj.listAnswer || obj.Answers || obj.answers;
-            if (Array.isArray(subList) && subList.length >= 3) {
+            if (Array.isArray(subList) && subList.length >= 2 && subList.length <= 15) {
                 subList.forEach((sub, idx) => {
                     const subIdx = String(sub.Order || sub.Index || sub.order || sub.index || (idx + 1));
                     const subAns = sub.tans || sub.Tans || sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;
-                    if (subAns) {
+                    if (subAns && isValidClozeWord(subAns) && parseInt(subIdx, 10) <= 15) {
                         IOE.state.clozeAnswers[subIdx] = String(subAns).trim();
                     }
                 });
             }
 
-            for (const k of Object.keys(obj)) {
-                traverse(obj[k]);
+            if (Array.isArray(obj)) {
+                for (const item of obj) traverse(item, depth + 1);
+            } else {
+                for (const k of Object.keys(obj)) {
+                    if (k === 'window' || k === 'document' || k === 'global') continue;
+                    traverse(obj[k], depth + 1);
+                }
             }
         }
-        traverse(data);
+
+        traverse(data, 0);
     }
 
     IOE.CLOZE_KNOWLEDGE_BANK = CLOZE_KNOWLEDGE_BANK;

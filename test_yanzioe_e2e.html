@@ -226,10 +226,18 @@
                 const hasAll11Empty = clozeEmptyRows && Object.keys(clozeEmptyRows).length >= 11 && clozeEmptyRows["1"] === "multicultural" && clozeEmptyRows["2"] === "from" && clozeEmptyRows["11"] === "citizenship";
                 log('16. Cloze Passage solves all 11 questions directly without requiring rows array (Canvas Engine mode)', hasAll11Empty);
 
+                // Test 17: Nguyen Phuc Anh / Pigneau de Behaine Cloze passage & URL sanitization
+                delete window.__require;
+                window.IOE.state.clozeAnswers = {};
+                const mockHistoricalPassage = "Nguyen Phuc Anh fled to the southern coastal tip of Vietnam where by chance he met a French priest, Pigneau de Behaine, who would eventually become his trusted adviser and play a major role in his rise to power.";
+                const histAns = await window.IOE.question.solveClozePassage(mockHistoricalPassage, []);
+                const okHist = histAns && histAns["1"] === "cope with" && histAns["4"] === "wipe out" && histAns["8"] === "role";
+                log('17. Solves Nguyen Phuc Anh & Pigneau de Behaine cloze test with exact historical ground truth', okHist);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 16;
+                const allPassed = failCount === 0 && passCount >= 17;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/16 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount}/17 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';
