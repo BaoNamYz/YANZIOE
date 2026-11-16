@@ -232,6 +232,12 @@
 
     /* ================= 2. CLOZE PASSAGE SOLVER (DẠNG ĐOẠN VĂN ĐIỀN TỪ) ================= */
     async function solveCocosClozePassage(scene) {
+        try {
+            if (IOE.question?.bypassIOESystemAnswers) {
+                IOE.question.bypassIOESystemAnswers();
+            }
+        } catch (e) {}
+
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
@@ -270,8 +276,11 @@
             if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home') || nameLower.includes('time') || nameLower.includes('score') || nameLower.includes('clock') || nameLower.includes('count')) {
                 continue;
             }
-            if (c.worldX > 750 && c.worldY > 450) continue; // Khu vực timer/score
-            if (c.worldY < 50) continue; // Khu vực thanh đáy
+            if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('btn_submit')) {
+                continue;
+            }
+            if (c.worldX > 750 && c.worldY > 450) continue; // Khu vực timer/score góc trên phải
+            // Giữ lại toàn bộ các nút đáp án (kể cả trong ScrollView cuộn xuống dưới)
             rawCandidates.push(c);
         }
 
@@ -395,8 +404,32 @@
         const recordedAnswers = {};
         let filledCount = 0;
 
+        // Tìm ScrollView nếu có để hỗ trợ cuộn mượt
+        let scrollViewComp = null;
+        try {
+            function findSV(n) {
+                if (!n || scrollViewComp) return;
+                if (typeof n.getComponent === 'function' && win.cc?.ScrollView) {
+                    const sv = n.getComponent(win.cc.ScrollView);
+                    if (sv) { scrollViewComp = sv; return; }
+                }
+                const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
+                for (const c of ch) findSV(c);
+            }
+            findSV(scene);
+        } catch (e) {}
+
         // 5. Click lần lượt từng hàng - Khớp theo Target Word chuẩn để chống xáo trộn A, B, C, D
         for (const row of validRows) {
+            // Tự động cuộn ScrollView xuống khi làm các câu từ câu 6 trở đi
+            if (row.rowNumber >= 6 && scrollViewComp) {
+                try {
+                    if (typeof scrollViewComp.scrollToPercentVertical === 'function') {
+                        const pct = Math.min(1.0, (row.rowNumber - 1) / validRows.length);
+                        scrollViewComp.scrollToPercentVertical(pct, 0.1);
+                    }
+                } catch (e) {}
+            }
             const rNum = row.rowNumber;
             if (clickedRowNumbers.has(rNum)) continue;
 
@@ -407,10 +440,13 @@
             let targetButton = null;
 
             // 1. Khớp ưu tiên 1: THEO TỪ NGỮ TIẾNG ANH (Word Matching)
-            // Miễn nhiễm 100% với việc hệ thống IOE tráo đổi ngẫu nhiên thứ tự A, B, C, D
+            // Miễn nhiễm 100% với việc hệ thống IOE xáo trộn thứ tự A, B, C, D
             const cleanWord = targetStr.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
             if (cleanWord.length >= 2 && !['a', 'b', 'c', 'd'].includes(cleanWord)) {
-                targetButton = row.buttons.find(b => b.text.toLowerCase().includes(cleanWord));
+                targetButton = row.buttons.find(b => {
+                    const bt = b.text.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
+                    return bt === cleanWord || bt.includes(cleanWord) || cleanWord.includes(bt);
+                });
             }
 
             // 2. Khớp ưu tiên 2: THEO CHỮ CÁI LỰA CHỌN (A, B, C, D)
@@ -428,7 +464,7 @@
                 }
             }
 
-            // 3. Fallback: Khớp từ ngữ
+            // 3. Fallback: Khớp từ ngữ tương đối
             if (!targetButton && cleanWord.length >= 2) {
                 targetButton = row.buttons.find(b => b.text.toLowerCase().includes(cleanWord));
             }

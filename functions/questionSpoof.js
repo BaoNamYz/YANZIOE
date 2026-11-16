@@ -1,6 +1,7 @@
 (function (global) {
     'use strict';
-    const IOE = global.IOE;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = global.IOE || win.IOE;
     if (!IOE) return;
 
     /* ================= 1. ADAPTIVE MISTAKE MEMORY ================= */
@@ -161,8 +162,9 @@ Question: ${qText}${optsText}`;
                 "6": "cultural",
                 "7": "appreciation",
                 "8": "respect",
-                "9": "inclusion",
-                "10": "connected"
+                "9": "conflict",
+                "10": "lonely",
+                "11": "citizenship"
             }
         },
         {
@@ -180,6 +182,10 @@ Question: ${qText}${optsText}`;
     ];
 
     const COMMON_COLLOCATIONS = [
+        { pattern: /avoiding\s+(?:social\s+)?(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'conflict' },
+        { pattern: /less\s+(?:\(\d+\)|_{2,}|\.{3,})\s+and\s+more\s+connected/i, word: 'lonely' },
+        { pattern: /spirit\s+of\s+global\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'citizenship' },
+        { pattern: /global\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'citizenship' },
         { pattern: /cuisines?\s+(?:\(\d+\)|_{2,}|\.{3,})\s+([a-z\s,]+)/i, word: 'from' },
         { pattern: /(?:companies|firms)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+offices/i, word: 'set up' },
         { pattern: /(?:by|among)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+residents/i, word: 'foreign' },
@@ -428,59 +434,131 @@ No explanations, no markdown fences.`;
         return origSend.apply(this, args);
     };
 
-    // 4. Quét sâu bộ nhớ Cocos2d Scene & Components để lấy Key gốc
-    function scanCocosMemoryForAnswers() {
+    // 4. Trích xuất trực tiếp dữ liệu đề thi & đáp án gốc từ Cocos Module / Scene Memory
+    function bypassIOESystemAnswers() {
+        let extracted = false;
+        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
+
+        // 1. Tận dụng hệ thống Cocos Module window.__require (ClientData / AppModel)
+        try {
+            if (typeof win.__require === 'function') {
+                const cd = win.__require('ClientData');
+                const clientData = cd?.default || cd;
+                const am = win.__require('AppModel');
+                const appModel = clientData?.AppModel || am?.default?.AppModel || am?.AppModel;
+                const game = appModel?.game || clientData?.game;
+
+                if (game) {
+                    console.log('[YANZIOE Bypass] Trích xuất thành công game data từ ClientData.AppModel!');
+                    // a. Trích xuất mảng đáp án Cloze Test (game.answear)
+                    if (Array.isArray(game.answear) && game.answear.length > 0) {
+                        game.answear.forEach((a, idx) => {
+                            const pos = String(a.position || (idx + 1));
+                            const ans = a.tans || a.Tans || a.ans || a.content;
+                            if (ans) {
+                                IOE.state.clozeAnswers[pos] = String(ans).trim();
+                                if (a.questId) IOE.state.correctAnswers.set(String(a.questId), String(ans).trim());
+                            }
+                        });
+                        extracted = true;
+                        IOE.toast(`🔓 [Bypass] Bắt trọn ${game.answear.length} đáp án Cloze Test từ AppModel!`, 2000);
+                    }
+
+                    // b. Trích xuất mảng câu hỏi (game.questionArr)
+                    if (Array.isArray(game.questionArr) && game.questionArr.length > 0) {
+                        game.questionArr.forEach((q, idx) => {
+                            const qId = String(q.questionId || q.id || (idx + 1));
+                            const tans = q.tans || q.Tans || q.data?.tans;
+                            if (tans) {
+                                IOE.state.correctAnswers.set(qId, String(tans).trim());
+                                IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                                if (q.questionContent?.content) {
+                                    IOE.state.correctAnswers.set(String(q.questionContent.content).trim(), String(tans).trim());
+                                }
+                            }
+                        });
+                        extracted = true;
+                    }
+
+                    // c. Trích xuất raw game.question
+                    if (Array.isArray(game.question) && game.question.length > 0) {
+                        game.question.forEach((q, idx) => {
+                            const qId = String(q.id || (idx + 1));
+                            const tans = q.tans || q.Tans;
+                            if (tans) {
+                                IOE.state.correctAnswers.set(qId, String(tans).trim());
+                                IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                            }
+                        });
+                        extracted = true;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[YANZIOE Bypass] Lỗi khi truy xuất ClientData/AppModel:', e);
+        }
+
+        // 2. Quét sâu Running Scene & các Components
         try {
             const cc = win.cc;
-            if (!cc || !cc.director || typeof cc.director.getScene !== 'function') return null;
-            const scene = cc.director.getScene();
-            if (!scene) return null;
-
-            function checkObj(obj, depth = 0, seen = new Set()) {
-                if (!obj || typeof obj !== 'object' || depth > 8 || seen.has(obj)) return;
-                seen.add(obj);
-
-                if (Array.isArray(obj)) {
-                    if (obj.length > 0 && typeof obj[0] === 'object') {
-                        const s = obj[0];
-                        const hasQ = s.content || s.question || s.title || s.Content || s.QuestionText;
-                        const hasAns = s.answer || s.key || s.correct || s.Answer || s.Key || s.DapAn;
-                        if (hasQ && hasAns) {
-                            parsePacket(obj);
-                            return;
+            if (cc && cc.director) {
+                const scene = (typeof cc.director.getRunningScene === 'function' ? cc.director.getRunningScene() : (typeof cc.director.getScene === 'function' ? cc.director.getScene() : null));
+                if (scene) {
+                    function inspectNode(node) {
+                        if (!node) return;
+                        const comps = node._components || [];
+                        for (const comp of comps) {
+                            if (!comp) continue;
+                            // Check comp.questionModel
+                            if (comp.questionModel) {
+                                const qm = comp.questionModel;
+                                const qId = String(qm.questionId || qm.id || '');
+                                const tans = qm.tans || qm.Tans;
+                                if (tans) {
+                                    if (qId) IOE.state.correctAnswers.set(qId, String(tans).trim());
+                                    if (qm.questionContent?.content) IOE.state.correctAnswers.set(String(qm.questionContent.content).trim(), String(tans).trim());
+                                    extracted = true;
+                                }
+                            }
+                            // Check comp.data (FixSentence, Game11, GamePlay)
+                            if (comp.data) {
+                                const d = comp.data;
+                                if (d.game?.ans && Array.isArray(d.game.ans)) {
+                                    d.game.ans.forEach((a, idx) => {
+                                        const pos = String(a.position || (idx + 1));
+                                        const ans = a.tans || a.Tans || a.ans;
+                                        if (ans) IOE.state.clozeAnswers[pos] = String(ans).trim();
+                                    });
+                                    extracted = true;
+                                }
+                                if (Array.isArray(d.answearArr)) {
+                                    const fullStr = d.answearArr.map(x => (typeof x === 'object' ? (x.content || '') : String(x))).join(' ').trim();
+                                    if (fullStr) IOE.state.correctAnswers.set('game11_full', fullStr);
+                                    extracted = true;
+                                }
+                            }
                         }
+                        const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+                        for (const ch of children) inspectNode(ch);
                     }
-                    obj.forEach(item => checkObj(item, depth + 1, seen));
-                    return;
+                    inspectNode(scene);
                 }
-
-                const id = obj.Id || obj.id || obj.QuestionId || obj.questionId;
-                const content = obj.Content || obj.content || obj.QuestionText || obj.question;
-                const rawKey = obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn;
-                if ((id || content) && rawKey) {
-                    parsePacket(obj);
-                }
-
-                for (const k of Object.keys(obj)) {
-                    if (k.startsWith('_') && k !== '_components') continue;
-                    try { checkObj(obj[k], depth + 1, seen); } catch (e) {}
-                }
-            }
-
-            function walkNode(node) {
-                if (!node) return;
-                if (Array.isArray(node._components)) {
-                    node._components.forEach(c => checkObj(c));
-                }
-                const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
-                children.forEach(walkNode);
-            }
-            walkNode(scene);
-
-            for (const gk of ['gameData', 'examData', 'exam', 'quizData', 'IOE_DATA', 'currentExam']) {
-                if (win[gk]) checkObj(win[gk]);
             }
         } catch (e) {}
+
+        // 3. Quét các biến toàn cục
+        for (const gk of ['gameData', 'examData', 'exam', 'quizData', 'IOE_DATA', 'currentExam']) {
+            if (win[gk]) {
+                parsePacket(win[gk]);
+                extracted = true;
+            }
+        }
+
+        return extracted;
+    }
+
+    function scanCocosMemoryForAnswers() {
+        return bypassIOESystemAnswers();
     }
 
     function parsePacket(data) {
@@ -489,11 +567,12 @@ No explanations, no markdown fences.`;
 
         function traverse(obj) {
             if (!obj || typeof obj !== 'object') return;
+
+            // 1. Kiểm tra mảng ans / answear (dạng bài Cloze Test / Điền từ)
             if (Array.isArray(obj)) {
-                // Kiểm tra mảng đáp án của dạng bài điền từ
                 if (obj.length >= 4 && obj.every(item => typeof item === 'string' && item.length < 50)) {
                     obj.forEach((ans, idx) => {
-                        IOE.state.clozeAnswers[String(idx + 1)] = ans;
+                        IOE.state.clozeAnswers[String(idx + 1)] = ans.trim();
                     });
                     IOE.toast(`🔓 [Bypass] Bắt được toàn bộ ${obj.length} đáp án Cloze Test!`, 2000);
                 }
@@ -501,24 +580,70 @@ No explanations, no markdown fences.`;
                 return;
             }
 
+            // 2. Kiểm tra thuộc tính ans / answear là mảng các object
+            if (Array.isArray(obj.ans)) {
+                obj.ans.forEach((a, idx) => {
+                    if (a && typeof a === 'object') {
+                        const pos = String(a.position || (idx + 1));
+                        const val = a.tans || a.Tans || a.ans || a.content;
+                        if (val) IOE.state.clozeAnswers[pos] = String(val).trim();
+                    } else if (typeof a === 'string') {
+                        IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
+                    }
+                });
+            }
+            if (Array.isArray(obj.answear)) {
+                obj.answear.forEach((a, idx) => {
+                    if (a && typeof a === 'object') {
+                        const pos = String(a.position || (idx + 1));
+                        const val = a.tans || a.Tans || a.ans || a.content;
+                        if (val) IOE.state.clozeAnswers[pos] = String(val).trim();
+                    } else if (typeof a === 'string') {
+                        IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
+                    }
+                });
+            }
+
+            // 3. Kiểm tra mảng question / questionArr
+            if (Array.isArray(obj.question)) {
+                obj.question.forEach((q, idx) => {
+                    const qId = String(q.id || (idx + 1));
+                    const tans = q.tans || q.Tans;
+                    if (tans) {
+                        IOE.state.correctAnswers.set(qId, String(tans).trim());
+                        IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                    }
+                });
+            }
+            if (Array.isArray(obj.questionArr)) {
+                obj.questionArr.forEach((q, idx) => {
+                    const qId = String(q.id || q.questionId || (idx + 1));
+                    const tans = q.tans || q.Tans;
+                    if (tans) {
+                        IOE.state.correctAnswers.set(qId, String(tans).trim());
+                        IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                    }
+                });
+            }
+
+            // 4. Kiểm tra Key gốc trực tiếp của từng câu hỏi
             const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;
             const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;
-            const rawKey = obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;
+            const rawKey = obj.tans || obj.Tans || obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;
 
             if (id && rawKey) {
-                IOE.state.correctAnswers.set(String(id), String(rawKey));
-                IOE.toast(`🔓 [Bypass] Bắt được Key gốc: ${rawKey}`, 1800);
+                IOE.state.correctAnswers.set(String(id), String(rawKey).trim());
             }
             if (content && rawKey) {
-                IOE.state.correctAnswers.set(String(content).trim(), String(rawKey));
+                IOE.state.correctAnswers.set(String(content).trim(), String(rawKey).trim());
             }
 
-            // Quét danh sách câu hỏi con / subquestions của bài Cloze
+            // 5. Quét danh sách câu hỏi con / subquestions của bài Cloze
             const subList = obj.SubQuestions || obj.subQuestions || obj.ListAnswer || obj.listAnswer || obj.Answers || obj.answers;
             if (Array.isArray(subList) && subList.length >= 3) {
                 subList.forEach((sub, idx) => {
                     const subIdx = String(sub.Order || sub.Index || sub.order || sub.index || (idx + 1));
-                    const subAns = sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;
+                    const subAns = sub.tans || sub.Tans || sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;
                     if (subAns) {
                         IOE.state.clozeAnswers[subIdx] = String(subAns).trim();
                     }
@@ -538,6 +663,7 @@ No explanations, no markdown fences.`;
         solveQuestion,
         solveClozePassage,
         scanCocosMemoryForAnswers,
+        bypassIOESystemAnswers,
         generate0msThinking,
         recordAdaptiveMistake,
         isAnswerWrong
