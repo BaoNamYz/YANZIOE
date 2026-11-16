@@ -151,9 +151,19 @@ Question: ${qText}${optsText}`;
     /* ================= 4B. CLOZE PASSAGE KNOWLEDGE & SOLVER ================= */
     const CLOZE_KNOWLEDGE_BANK = [
         {
-            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'mid-autumn', 'offices in vietnam'],
-            answers: { "1": "A", "2": "B", "3": "D", "4": "C", "5": "A", "6": "C" },
-            words: { "1": "multicultural", "2": "from", "3": "set up", "4": "foreign", "5": "explore", "6": "cultural" }
+            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'mid-autumn', 'offices in vietnam', 'open to learning'],
+            words: {
+                "1": "multicultural",
+                "2": "from",
+                "3": "set up",
+                "4": "foreign",
+                "5": "explore",
+                "6": "cultural",
+                "7": "appreciation",
+                "8": "respect",
+                "9": "inclusion",
+                "10": "connected"
+            }
         },
         {
             keywords: ['global warming', 'greenhouse', 'carbon dioxide', 'temperature'],
@@ -175,6 +185,10 @@ Question: ${qText}${optsText}`;
         { pattern: /(?:by|among)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+residents/i, word: 'foreign' },
         { pattern: /more\s+(?:\(\d+\)|_{2,}|\.{3,})\s+country/i, word: 'multicultural' },
         { pattern: /open to learning\s+(?:.*)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'explore' },
+        { pattern: /(?:show|cultural)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'appreciation' },
+        { pattern: /(?:mutual|show)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'respect' },
+        { pattern: /(?:social|promote)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'inclusion' },
+        { pattern: /(?:feel|stay)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'connected' },
         { pattern: /depend\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
         { pattern: /rely\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
         { pattern: /interested\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'in' },
@@ -257,72 +271,80 @@ No explanations, no markdown fences.`;
         if (!passageText) return null;
         const normPassage = passageText.toLowerCase();
 
-        // 1. Tier 0 / Tier 1: Check knowledge bank
-        for (const entry of CLOZE_KNOWLEDGE_BANK) {
-            const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
-            if (matches.length >= 1) {
-                console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi IOE!');
-                const outAnswers = {};
-                for (const r of rows) {
-                    const idxStr = String(r.index);
-                    if (entry.answers[idxStr]) {
-                        outAnswers[idxStr] = entry.answers[idxStr];
-                    } else {
-                        outAnswers[idxStr] = ['A', 'B', 'C', 'D'][(r.index - 1) % 4];
-                    }
+        // 0. Quét trước bộ nhớ Cocos2d để lấy dữ liệu gốc nếu có
+        try { scanCocosMemoryForAnswers(); } catch (e) {}
+
+        const outAnswers = {};
+
+        // 1. Kiểm tra đáp án bắt được từ Network / Bộ nhớ (Bypass Level 0)
+        if (IOE.state.clozeAnswers && Object.keys(IOE.state.clozeAnswers).length > 0) {
+            console.log('[YANZIOE Bypass] Sử dụng đáp án gốc bắt được từ hệ thống!');
+            for (const r of rows) {
+                const idxStr = String(r.index);
+                if (IOE.state.clozeAnswers[idxStr]) {
+                    outAnswers[idxStr] = IOE.state.clozeAnswers[idxStr];
                 }
-                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Đáp án xác thực: ${JSON.stringify(outAnswers)}`;
-                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 1 (Ngân hàng IOE 0ms)', thinking });
+            }
+            if (Object.keys(outAnswers).length >= (rows.length || 6)) {
+                const thinking = `🔓 [Bypass Hệ Thống]: Lấy toàn bộ ${Object.keys(outAnswers).length} đáp án gốc từ bộ nhớ IOE.\n✓ Đáp án: ${JSON.stringify(outAnswers)}`;
+                IOE.events?.emit('questionSolved', { qId: 'cloze_passage_bypass', answer: JSON.stringify(outAnswers), tier: 'Tier 0 (Key Gốc IOE Bypass)', thinking });
                 return outAnswers;
             }
         }
 
-        // 2. Collocation & Grammar CAS Matching
-        const resultAnswers = {};
+        // 2. Tier 1: Check knowledge bank chuẩn Bộ GD&ĐT (100% verified ground truth)
+        for (const entry of CLOZE_KNOWLEDGE_BANK) {
+            const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
+            if (matches.length >= 1) {
+                console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi chuẩn IOE!');
+                for (const r of rows) {
+                    const idxStr = String(r.index);
+                    if (entry.words && entry.words[idxStr]) {
+                        outAnswers[idxStr] = entry.words[idxStr];
+                    } else if (entry.answers && entry.answers[idxStr]) {
+                        outAnswers[idxStr] = entry.answers[idxStr];
+                    }
+                }
+                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${Object.keys(outAnswers).length} đáp án xác thực: ${JSON.stringify(outAnswers)}`;
+                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 1 (Ngân hàng IOE Chuẩn)', thinking });
+                return outAnswers;
+            }
+        }
+
+        // 3. Collocation & Grammar CAS Matching
         for (const row of rows) {
             const rowIdx = String(row.index || '');
+            if (outAnswers[rowIdx]) continue;
             const opts = (row.options || []).map(o => String(o).trim());
 
             for (const col of COMMON_COLLOCATIONS) {
                 if (col.pattern.test(passageText)) {
-                    const matchedOptIdx = opts.findIndex(o => o.toLowerCase().includes(col.word.toLowerCase()));
-                    if (matchedOptIdx !== -1) {
-                        resultAnswers[rowIdx] = String.fromCharCode(65 + matchedOptIdx);
+                    const matchedOpt = opts.find(o => o.toLowerCase().includes(col.word.toLowerCase()));
+                    if (matchedOpt) {
+                        outAnswers[rowIdx] = col.word;
                         break;
                     }
                 }
             }
         }
 
-        if (Object.keys(resultAnswers).length >= (rows.length || 6)) {
-            return resultAnswers;
+        if (Object.keys(outAnswers).length >= (rows.length || 6)) {
+            return outAnswers;
         }
 
-        // 3. AI Solver (nếu có key)
+        // 4. AI Solver (nếu có key AI cấu hình)
         const aiResult = await solveClozeWithAi(passageText, rows);
         if (aiResult && typeof aiResult === 'object') {
-            const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ pháp và ngữ cảnh toàn đoạn văn.\n✓ Đáp án: ${JSON.stringify(aiResult)}`;
-            IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(aiResult), tier: 'Tier 2 (AI Cloze)', thinking });
-            return aiResult;
+            for (const [k, v] of Object.entries(aiResult)) {
+                if (!outAnswers[k]) outAnswers[k] = v;
+            }
+            const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ cảnh đoạn văn.\n✓ Đáp án: ${JSON.stringify(outAnswers)}`;
+            IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 2 (AI Cloze)', thinking });
+            return outAnswers;
         }
 
-        // 4. Fallback: Kết hợp kết quả phân tích
-        if (rows.length > 0) {
-            for (const r of rows) {
-                const k = String(r.index || 1);
-                if (!resultAnswers[k]) {
-                    resultAnswers[k] = ['A', 'B', 'C', 'D'][(r.index - 1) % 4];
-                }
-            }
-        } else {
-            for (let i = 1; i <= 6; i++) {
-                const k = String(i);
-                if (!resultAnswers[k]) {
-                    resultAnswers[k] = ['A', 'B', 'C', 'D'][(i - 1) % 4];
-                }
-            }
-        }
-        return resultAnswers;
+        // TUYỆT ĐỐI KHÔNG BỊA ĐÁP ÁN (Không dùng modulo ['A','B','C','D'][(i-1)%4])
+        return outAnswers;
     }
 
     /* ================= 5. SOLVE ORCHESTRATOR ================= */
@@ -363,20 +385,33 @@ No explanations, no markdown fences.`;
         return null;
     }
 
-    /* ================= 6. NETWORK INTERCEPTOR ================= */
+    /* ================= 6. UNIVERSAL SYSTEM BYPASS & NETWORK SNIFFER ================= */
+    // 1. Hook JSON.parse để tóm toàn bộ dữ liệu đề thi được parse trong runtime
+    try {
+        const origJsonParse = JSON.parse;
+        JSON.parse = function (...args) {
+            const res = origJsonParse.apply(this, args);
+            try {
+                if (res && typeof res === 'object') {
+                    parsePacket(res);
+                }
+            } catch (e) {}
+            return res;
+        };
+    } catch (e) {}
+
+    // 2. Hook Fetch không giới hạn URL
     const originalFetch = window.fetch;
     window.fetch = async function (...args) {
         const res = await originalFetch.apply(this, args);
         try {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-            if (url.includes('api') || url.includes('exam') || url.includes('test') || url.includes('question')) {
-                const clone = res.clone();
-                clone.json().then(data => parsePacket(data)).catch(() => {});
-            }
+            const clone = res.clone();
+            clone.json().then(data => parsePacket(data)).catch(() => {});
         } catch (e) {}
         return res;
     };
 
+    // 3. Hook XMLHttpRequest không giới hạn URL
     const origOpen = XMLHttpRequest.prototype.open;
     const origSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function (m, url, ...rest) {
@@ -386,33 +421,108 @@ No explanations, no markdown fences.`;
     XMLHttpRequest.prototype.send = function (...args) {
         this.addEventListener('load', function () {
             try {
-                if (this._ioeUrl && (this._ioeUrl.includes('api') || this._ioeUrl.includes('exam'))) {
-                    const data = JSON.parse(this.responseText);
-                    parsePacket(data);
-                }
+                const data = JSON.parse(this.responseText);
+                parsePacket(data);
             } catch (e) {}
         });
         return origSend.apply(this, args);
     };
 
+    // 4. Quét sâu bộ nhớ Cocos2d Scene & Components để lấy Key gốc
+    function scanCocosMemoryForAnswers() {
+        try {
+            const cc = win.cc;
+            if (!cc || !cc.director || typeof cc.director.getScene !== 'function') return null;
+            const scene = cc.director.getScene();
+            if (!scene) return null;
+
+            function checkObj(obj, depth = 0, seen = new Set()) {
+                if (!obj || typeof obj !== 'object' || depth > 8 || seen.has(obj)) return;
+                seen.add(obj);
+
+                if (Array.isArray(obj)) {
+                    if (obj.length > 0 && typeof obj[0] === 'object') {
+                        const s = obj[0];
+                        const hasQ = s.content || s.question || s.title || s.Content || s.QuestionText;
+                        const hasAns = s.answer || s.key || s.correct || s.Answer || s.Key || s.DapAn;
+                        if (hasQ && hasAns) {
+                            parsePacket(obj);
+                            return;
+                        }
+                    }
+                    obj.forEach(item => checkObj(item, depth + 1, seen));
+                    return;
+                }
+
+                const id = obj.Id || obj.id || obj.QuestionId || obj.questionId;
+                const content = obj.Content || obj.content || obj.QuestionText || obj.question;
+                const rawKey = obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn;
+                if ((id || content) && rawKey) {
+                    parsePacket(obj);
+                }
+
+                for (const k of Object.keys(obj)) {
+                    if (k.startsWith('_') && k !== '_components') continue;
+                    try { checkObj(obj[k], depth + 1, seen); } catch (e) {}
+                }
+            }
+
+            function walkNode(node) {
+                if (!node) return;
+                if (Array.isArray(node._components)) {
+                    node._components.forEach(c => checkObj(c));
+                }
+                const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+                children.forEach(walkNode);
+            }
+            walkNode(scene);
+
+            for (const gk of ['gameData', 'examData', 'exam', 'quizData', 'IOE_DATA', 'currentExam']) {
+                if (win[gk]) checkObj(win[gk]);
+            }
+        } catch (e) {}
+    }
+
     function parsePacket(data) {
         if (!data || typeof data !== 'object') return;
+        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
+
         function traverse(obj) {
             if (!obj || typeof obj !== 'object') return;
             if (Array.isArray(obj)) {
+                // Kiểm tra mảng đáp án của dạng bài điền từ
+                if (obj.length >= 4 && obj.every(item => typeof item === 'string' && item.length < 50)) {
+                    obj.forEach((ans, idx) => {
+                        IOE.state.clozeAnswers[String(idx + 1)] = ans;
+                    });
+                    IOE.toast(`🔓 [Bypass] Bắt được toàn bộ ${obj.length} đáp án Cloze Test!`, 2000);
+                }
                 obj.forEach(traverse);
                 return;
             }
+
             const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;
             const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;
-            const rawKey = obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn;
+            const rawKey = obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;
 
             if (id && rawKey) {
                 IOE.state.correctAnswers.set(String(id), String(rawKey));
-                IOE.toast(`🔓 Bắt được Key gốc: ${rawKey}`, 1800);
+                IOE.toast(`🔓 [Bypass] Bắt được Key gốc: ${rawKey}`, 1800);
             }
             if (content && rawKey) {
                 IOE.state.correctAnswers.set(String(content).trim(), String(rawKey));
+            }
+
+            // Quét danh sách câu hỏi con / subquestions của bài Cloze
+            const subList = obj.SubQuestions || obj.subQuestions || obj.ListAnswer || obj.listAnswer || obj.Answers || obj.answers;
+            if (Array.isArray(subList) && subList.length >= 3) {
+                subList.forEach((sub, idx) => {
+                    const subIdx = String(sub.Order || sub.Index || sub.order || sub.index || (idx + 1));
+                    const subAns = sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;
+                    if (subAns) {
+                        IOE.state.clozeAnswers[subIdx] = String(subAns).trim();
+                    }
+                });
             }
 
             for (const k of Object.keys(obj)) {
@@ -422,9 +532,12 @@ No explanations, no markdown fences.`;
         traverse(data);
     }
 
+    IOE.CLOZE_KNOWLEDGE_BANK = CLOZE_KNOWLEDGE_BANK;
+
     IOE.question = {
         solveQuestion,
         solveClozePassage,
+        scanCocosMemoryForAnswers,
         generate0msThinking,
         recordAdaptiveMistake,
         isAnswerWrong

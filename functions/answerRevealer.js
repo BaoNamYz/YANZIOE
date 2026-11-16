@@ -13,9 +13,9 @@
             hud.id = HUD_ID;
             hud.style.cssText = `
                 position: fixed;
-                bottom: 24px;
-                left: 50%;
-                transform: translateX(-50%);
+                bottom: 12px;
+                left: 16px;
+                transform: none;
                 z-index: 9999999;
                 background: rgba(15, 23, 42, 0.94);
                 backdrop-filter: blur(10px);
@@ -27,7 +27,7 @@
                 font-size: 12px;
                 color: #f8fafc;
                 min-width: 280px;
-                max-width: 90vw;
+                max-width: 450px;
                 display: none;
                 flex-direction: column;
                 gap: 6px;
