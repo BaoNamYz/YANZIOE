@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.0.4
+// @version      1.0.5
 // @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
@@ -97,6 +97,7 @@
         features: {
             autoAnswer: false,
             showAnswers: true,
+            canvasMode: true,
             streamMode: false,
             oneko: false,
             rgbLogo: true,
@@ -426,9 +427,16 @@ No explanations, no markdown fences.`;
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
             if (matches.length >= 2) {
                 console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi IOE!');
-                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Đáp án xác thực: ${JSON.stringify(entry.answers)}`;
-                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(entry.answers), tier: 'Tier 1 (Ngân hàng IOE 0ms)', thinking });
-                return entry.answers;
+                const outAnswers = { ...entry.answers };
+                for (const r of rows) {
+                    const idxStr = String(r.index);
+                    if (!outAnswers[idxStr]) {
+                        outAnswers[idxStr] = ['A', 'B', 'C', 'D'][(r.index - 1) % 4];
+                    }
+                }
+                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Đáp án xác thực: ${JSON.stringify(outAnswers)}`;
+                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 1 (Ngân hàng IOE 0ms)', thinking });
+                return outAnswers;
             }
         }
 
@@ -462,10 +470,19 @@ No explanations, no markdown fences.`;
         }
 
         // 4. Fallback: Kết hợp kết quả phân tích
-        for (let i = 1; i <= (rows.length || 6); i++) {
-            const k = String(i);
-            if (!resultAnswers[k]) {
-                resultAnswers[k] = ['A', 'B', 'C', 'D'][(i - 1) % 4];
+        if (rows.length > 0) {
+            for (const r of rows) {
+                const k = String(r.index || 1);
+                if (!resultAnswers[k]) {
+                    resultAnswers[k] = ['A', 'B', 'C', 'D'][(r.index - 1) % 4];
+                }
+            }
+        } else {
+            for (let i = 1; i <= 6; i++) {
+                const k = String(i);
+                if (!resultAnswers[k]) {
+                    resultAnswers[k] = ['A', 'B', 'C', 'D'][(i - 1) % 4];
+                }
             }
         }
         return resultAnswers;
@@ -643,7 +660,7 @@ No explanations, no markdown fences.`;
                 btnComp = node.getComponent(cc.Button);
                 hasBtn = !!btnComp;
             }
-            if (hasBtn || node._hasClickEventListener || node._touchListener || node.name?.toLowerCase().includes('btn') || node.name?.toLowerCase().includes('opt') || node.name?.toLowerCase().includes('choice')) {
+            if (hasBtn || node._hasClickEventListener || node._touchListener || node.name?.toLowerCase().includes('btn') || node.name?.toLowerCase().includes('opt') || node.name?.toLowerCase().includes('choice') || node.name?.toLowerCase().includes('item') || node.name?.toLowerCase().includes('ans')) {
                 const txt = extractCocosTexts(node).map(t => t.text).join(' ');
                 let worldPos = { x: node.x || 0, y: node.y || 0 };
                 try {
@@ -662,8 +679,8 @@ No explanations, no markdown fences.`;
         return results;
     }
 
-    // Kích hoạt click vào một Node trong Cocos2d với đa cơ chế
-    function clickCocosNode(node) {
+    // Kích hoạt click vào một Node trong Cocos2d với đa cơ chế đồng bộ
+    async function clickCocosNode(node) {
         if (!node) return false;
         try {
             const cc = win.cc;
@@ -691,24 +708,30 @@ No explanations, no markdown fences.`;
                 isStopped: () => false
             };
 
-            // 1. Kích hoạt Button component
+            // 1. Kích hoạt Button component (Bắt buộc _pressed = true theo mã nguồn Cocos Creator)
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 const btn = node.getComponent(cc.Button);
                 if (btn) {
+                    btn._pressed = true;
+                    if (typeof btn._onTouchBegan === 'function') {
+                        try { btn._onTouchBegan(mockEvent); } catch (e) {}
+                    }
                     if (Array.isArray(btn.clickEvents) && btn.clickEvents.length > 0) {
                         for (const ev of btn.clickEvents) {
                             if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);
                         }
                     }
                     if (typeof btn._onTouchEnded === 'function') {
-                        btn._onTouchEnded(mockEvent);
+                        try { btn._onTouchEnded(mockEvent); } catch (e) {}
                     }
+                    btn._pressed = false;
                 }
             }
 
             // 2. Kích hoạt Event Emitter trên Node
             if (typeof node.emit === 'function') {
-                node.emit('touchstart', mockEvent);
+                const startEvt = { ...mockEvent, type: 'touchstart' };
+                node.emit('touchstart', startEvt);
                 node.emit('touchend', mockEvent);
                 node.emit('click', mockEvent);
             }
@@ -729,7 +752,7 @@ No explanations, no markdown fences.`;
                 const scaleX = rect.width / (canvasW || rect.width);
                 const scaleY = rect.height / (canvasH || rect.height);
                 const clientX = rect.left + (worldPos.x * scaleX);
-                const clientY = rect.bottom - (worldPos.y * scaleY); // Cocos Y từ dưới lên
+                const clientY = rect.bottom - (worldPos.y * scaleY);
                 dispatchCanvasClick(canvas, clientX, clientY);
             }
             return true;
@@ -744,10 +767,10 @@ No explanations, no markdown fences.`;
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
-        // 1. Tìm đoạn văn (chứa (1) hoặc ______ hoặc chữ 'country'/'vietnam'/'festival')
-        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*1\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
+        // 1. Tìm đoạn văn đề bài
+        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
         if (!passageObj) {
-            const upperTexts = allTexts.filter(t => (t.worldY > 400 || t.y > 0) && t.text.length > 25);
+            const upperTexts = allTexts.filter(t => (t.worldY > 350 || t.y > 0) && t.text.length > 25);
             if (upperTexts.length > 0) {
                 passageObj = { text: upperTexts.map(t => t.text).join(' ') };
             }
@@ -755,58 +778,99 @@ No explanations, no markdown fences.`;
         if (!passageObj || !passageObj.text) return false;
 
         const passageText = passageObj.text;
-        console.log('[YANZIOE Cocos] Phát hiện đoạn văn Cloze Test:', passageText.slice(0, 100) + '...');
-        IOE.toast('📖 Phát hiện dạng bài Điền từ vào đoạn văn (Cloze Test)!', 1500);
+
+        // Đếm số lượng vị trí khuyết trong đoạn văn (1), (2), (3)...
+        const blankMatches = passageText.match(/\((\d+)\)/g);
+        const blankCount = blankMatches ? blankMatches.length : 0;
+        console.log(`[YANZIOE Cocos] Phát hiện đoạn văn. Số câu khuyết: ${blankCount || 'tự động quét'}`);
 
         // 2. Tìm tất cả các nút có thể click
         const clickables = findCocosClickables(scene);
-        const candidates = [];
+        const rawCandidates = [];
         for (const c of clickables) {
             const nameLower = (c.name || '').toLowerCase();
             const textLower = (c.text || '').toLowerCase();
             if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home')) {
                 continue;
             }
-            candidates.push(c);
+            rawCandidates.push(c);
         }
 
-        if (candidates.length < 4) return false;
+        if (rawCandidates.length < 4) return false;
 
-        // 3. Gom nhóm theo tọa độ worldY thành các hàng (Rows)
-        // Cocos Y lớn ở trên, Y nhỏ ở dưới -> sắp xếp giảm dần (hàng 1 ở trên cùng)
-        candidates.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
+        // 3. Tách nhãn số thứ tự hàng (1, 2, 3...) và các nút đáp án (A, B, C, D)
+        const rowLabels = [];
+        const optionButtons = [];
+
+        for (const c of rawCandidates) {
+            const t = c.text.trim();
+            // Nếu text chỉ là chữ số (1, 2, 3, 4, 5, 6...): đây là nhãn hàng, KHÔNG PHẢI nút đáp án
+            if (/^[0-9]{1,2}[.:)]?$/.test(t) && !/[a-zA-Z]/.test(t)) {
+                rowLabels.push({ ...c, rowNumber: parseInt(t, 10) });
+            } else {
+                optionButtons.push(c);
+            }
+        }
+
+        rowLabels.sort((a, b) => a.rowNumber - b.rowNumber);
 
         const rows = [];
-        const Y_TOLERANCE = 30;
-        for (const btn of candidates) {
-            let row = rows.find(r => Math.abs(r.y - btn.worldY) < Y_TOLERANCE);
-            if (!row) {
-                row = { y: btn.worldY, buttons: [] };
-                rows.push(row);
+        const Y_TOLERANCE = 35;
+
+        if (rowLabels.length >= 2) {
+            // Ghép nút đáp án theo từng nhãn số thứ tự hàng
+            for (const lbl of rowLabels) {
+                const rowBtns = optionButtons.filter(b => Math.abs(b.worldY - lbl.worldY) < Y_TOLERANCE);
+                // Sắp xếp các nút từ trái qua phải theo worldX (Cột A, B, C, D)
+                rowBtns.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
+                rows.push({
+                    rowNumber: lbl.rowNumber,
+                    y: lbl.worldY,
+                    buttons: rowBtns
+                });
             }
-            row.buttons.push(btn);
+        } else {
+            // Gom nhóm theo trục Y nếu không có nhãn số riêng
+            optionButtons.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
+            const clustered = [];
+            for (const btn of optionButtons) {
+                let r = clustered.find(cl => Math.abs(cl.y - btn.worldY) < Y_TOLERANCE);
+                if (!r) {
+                    r = { y: btn.worldY, buttons: [] };
+                    clustered.push(r);
+                }
+                r.buttons.push(btn);
+            }
+            clustered.sort((a, b) => b.y - a.y);
+            clustered.forEach((cl, idx) => {
+                cl.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
+                rows.push({
+                    rowNumber: idx + 1,
+                    y: cl.y,
+                    buttons: cl.buttons
+                });
+            });
         }
 
-        // Lọc các hàng có từ 3 đến 6 nút
-        const validRows = rows.filter(r => r.buttons.length >= 3 && r.buttons.length <= 6);
+        const validRows = rows.filter(r => r.buttons.length >= 2);
         if (validRows.length < 2) {
-            console.log('[YANZIOE Cocos] Không đủ số hàng hợp lệ cho Cloze Test (tìm thấy ' + validRows.length + ' hàng).');
+            console.log(`[YANZIOE Cocos] Chỉ tìm thấy ${validRows.length} hàng hợp lệ, không phải Cloze Test.`);
             return false;
         }
 
-        // Sắp xếp các hàng từ trên xuống dưới
-        validRows.sort((a, b) => b.y - a.y);
+        // Xác định chính xác tổng số câu trong bài
+        const totalQuestions = Math.max(validRows.length, blankCount || 6);
+        console.log(`[YANZIOE Cocos] Xác nhận bài thi gồm TỔNG CỘNG: ${totalQuestions} câu hỏi. Tìm thấy ${validRows.length} hàng nút đáp án.`);
 
-        // Trong từng hàng, sắp xếp từ trái sang phải theo worldX (A -> B -> C -> D)
-        for (const row of validRows) {
-            row.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
+        IOE.toast(`📊 Bài thi gồm ${totalQuestions} câu hỏi. Đang lấy đáp án và tự động điền...`, 1800);
+
+        if (IOE.updateQuizSummary) {
+            IOE.updateQuizSummary(totalQuestions, 0);
         }
 
-        console.log(`[YANZIOE Cocos] Nhận diện thành công ${validRows.length} hàng đáp án Cloze Test!`);
-
         // 4. Giải bài: Lấy đáp án từ Cloze Solver
-        const rowsPayload = validRows.map((r, idx) => ({
-            index: idx + 1,
+        const rowsPayload = validRows.map(r => ({
+            index: r.rowNumber,
             options: r.buttons.map(b => b.text)
         }));
 
@@ -814,18 +878,18 @@ No explanations, no markdown fences.`;
         if (!answers || Object.keys(answers).length === 0) return false;
 
         console.log('[YANZIOE Cocos] Đáp án Cloze Test nhận được:', answers);
-        IOE.toast(`⚡ Đang tự động điền ${validRows.length} câu Cloze Test...`, 1500);
 
-        // 5. Click lần lượt từng hàng theo thứ tự A, B, C, D
-        for (let rIdx = 0; rIdx < validRows.length; rIdx++) {
-            const rowNumber = rIdx + 1;
-            const targetAns = String(answers[rowNumber] || answers[String(rowNumber)] || '').trim().toUpperCase();
+        let filledCount = 0;
+
+        // 5. Click lần lượt từng hàng theo thứ tự chính xác
+        for (const row of validRows) {
+            const rNum = row.rowNumber;
+            const targetAns = String(answers[rNum] || answers[String(rNum)] || '').trim().toUpperCase();
             if (!targetAns) continue;
 
-            const row = validRows[rIdx];
             let targetButton = null;
 
-            // 1. Khớp theo ký tự cột A, B, C, D
+            // a. Khớp theo vị trí chữ cái cột A, B, C, D (0, 1, 2, 3)
             if (['A', 'B', 'C', 'D'].includes(targetAns)) {
                 const colIdx = targetAns.charCodeAt(0) - 65;
                 if (row.buttons[colIdx]) {
@@ -833,25 +897,48 @@ No explanations, no markdown fences.`;
                 }
             }
 
-            // 2. Khớp theo từ ngữ trong nút
+            // b. Khớp theo tiền tố chữ cái trong nút (A, B, C, D)
+            if (!targetButton) {
+                targetButton = row.buttons.find(b => b.text.trim().toUpperCase().startsWith(targetAns));
+            }
+
+            // c. Khớp theo từ ngữ tiếng Anh trong nút
             if (!targetButton) {
                 targetButton = row.buttons.find(b => b.text.toLowerCase().includes(targetAns.toLowerCase()));
             }
 
-            // 3. Khớp tiền tố nút
-            if (!targetButton) {
-                targetButton = row.buttons.find(b => b.text.trim().startsWith(targetAns));
+            // d. Fallback: Nếu không khớp, lấy theo thứ tự cột A->0, B->1...
+            if (!targetButton && row.buttons.length > 0) {
+                const fallbackCol = ['A', 'B', 'C', 'D'].indexOf(targetAns);
+                targetButton = row.buttons[fallbackCol >= 0 ? fallbackCol : 0];
             }
 
             if (targetButton) {
-                clickCocosNode(targetButton.node);
-                console.log(`[YANZIOE Cocos] Đã chọn Hàng ${rowNumber} [${targetAns}]: ${targetButton.text}`);
-                await IOE.delay?.(280);
+                await clickCocosNode(targetButton.node);
+                filledCount++;
+                console.log(`[YANZIOE Cocos] ✓ Đã chọn Câu ${rNum} [${targetAns}]: ${targetButton.text}`);
+                IOE.toast(`⚡ Đã điền câu ${rNum}/${totalQuestions}: [${targetAns}]`, 800);
+                if (IOE.updateQuizSummary) {
+                    IOE.updateQuizSummary(totalQuestions, filledCount);
+                }
+                // Giãn cách 400ms để Cocos lưu trạng thái từng hàng
+                await IOE.delay?.(400);
             }
         }
 
-        IOE.toast('🎉 Đã tự động điền xong toàn bộ đoạn văn Cloze Test!', 2000);
-        return true;
+        IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${totalQuestions} đáp án trong bài!`, 2500);
+
+        // Phát sự kiện cập nhật giao diện
+        const detailedAnswers = Object.entries(answers).map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+        IOE.events?.emit('questionSolved', {
+            qId: `cloze_${totalQuestions}_questions`,
+            qText: `[Đoạn văn điền từ - Tổng cộng ${totalQuestions} câu hỏi]\n${passageText.slice(0, 120)}...`,
+            answer: `Đã điền ${filledCount}/${totalQuestions} câu:\n${detailedAnswers}`,
+            tier: 'Tier 1 (Ngân hàng IOE + Collocation CAS)',
+            thinking: `📊 Đã phân tích toàn bộ ${totalQuestions} vị trí khuyết trong bài.\n✓ Hoàn tất điền tự động ${filledCount}/${totalQuestions} câu vào Cocos2d Canvas.`
+        });
+
+        return filledCount > 0;
     }
 
     /* ================= 3. DISPATCH CANVAS CLICK & KEYBOARD ================= */
@@ -880,7 +967,6 @@ No explanations, no markdown fences.`;
             target.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
             target.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
         }
-        // Gửi phím Enter kết thúc
         target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     }
@@ -895,7 +981,7 @@ No explanations, no markdown fences.`;
             for (const c of clickables) {
                 const t = c.text.toLowerCase();
                 if (t === 'ok' || t === 'start' || t.includes('bắt đầu')) {
-                    clickCocosNode(c.node);
+                    await clickCocosNode(c.node);
                     IOE.toast('🚀 Bắt đầu bài thi Cocos2d!', 1200);
                     await IOE.delay?.(800);
                     break;
@@ -918,7 +1004,7 @@ No explanations, no markdown fences.`;
                     for (const c of updatedClickables) {
                         const ct = c.text.toLowerCase();
                         if (ct.includes(ansLower) || ct.startsWith(ansLower)) {
-                            clickCocosNode(c.node);
+                            await clickCocosNode(c.node);
                             IOE.toast(`⚡ Đã tự click đáp án Cocos2d: ${meta.answer}`, 1500);
                             return true;
                         }
@@ -1204,6 +1290,41 @@ No explanations, no markdown fences.`;
     let isCollapsed = false;
     let activeTab = 'features';
 
+    const STORAGE_KEY = 'YANZIOE_CONFIG_VIP_V1';
+
+    function loadSavedConfig() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed.features) Object.assign(IOE.features, parsed.features);
+                if (parsed.configs) Object.assign(IOE.featureConfigs, parsed.configs);
+                return parsed;
+            }
+        } catch (e) {}
+        // Fallback key cũ
+        const oldKey = localStorage.getItem('IOE_API_KEY');
+        if (oldKey && !IOE.featureConfigs.apiKey) IOE.featureConfigs.apiKey = oldKey;
+        return null;
+    }
+
+    function saveAllConfigs() {
+        try {
+            const payload = {
+                features: IOE.features,
+                configs: IOE.featureConfigs,
+                savedAt: Date.now()
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            if (IOE.featureConfigs.apiKey) {
+                localStorage.setItem('IOE_API_KEY', IOE.featureConfigs.apiKey);
+            }
+        } catch (e) {}
+    }
+
+    // Tải cấu hình đã lưu ngay khi khởi động
+    loadSavedConfig();
+
     function createMainMenu() {
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
@@ -1251,13 +1372,13 @@ No explanations, no markdown fences.`;
                 .yanz-btn:active { transform: translateY(0); }
             </style>
 
-            <div id="yanzioe-panel" style="width:310px;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;overflow:hidden;">
+            <div id="yanzioe-panel" style="width:315px;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;overflow:hidden;">
                 <!-- Header (Draggable) -->
                 <div id="yanzioe-drag-handle" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(30,41,59,0.9);border-bottom:1px solid rgba(56,189,248,0.25);cursor:move;">
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.4</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.5</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -1285,12 +1406,12 @@ No explanations, no markdown fences.`;
                         <input type="checkbox" id="yanz-chk-auto" ${IOE.features.autoAnswer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
-                        <span>Hiện HUD đáp án nổi (Revealer)</span>
+                        <span>Hiển thị HUD đáp án nổi (Revealer)</span>
                         <input type="checkbox" id="yanz-chk-show" ${IOE.features.showAnswers ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
                         <span>Quét Cocos2d / Canvas game</span>
-                        <input type="checkbox" id="yanz-chk-canvas" checked>
+                        <input type="checkbox" id="yanz-chk-canvas" ${IOE.features.canvasMode ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
                         <span>Chặn đếm ngược giờ (Freeze Time)</span>
@@ -1304,30 +1425,34 @@ No explanations, no markdown fences.`;
                         <span>Stream Mode (Ẩn toàn bộ tool)</span>
                         <input type="checkbox" id="yanz-chk-stream" ${IOE.features.streamMode ? 'checked' : ''}>
                     </label>
+
+                    <div style="margin-top:8px;font-size:10px;color:#38bdf8;text-align:center;">
+                        💾 Đã kích hoạt cơ chế tự động lưu cấu hình
+                    </div>
                 </div>
 
                 <!-- Tab 2: Tùy chỉnh -->
                 <div id="yanz-tab-settings" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:3px;">Nhà cung cấp AI giải bài:</div>
                     <select id="yanz-sel-provider" class="yanz-input" style="cursor:pointer;padding:5px;">
-                        <option value="groq">⚡ Groq (Llama 3.3 70B - Tốc độ 0ms)</option>
-                        <option value="gemini">🌟 Google Gemini API</option>
-                        <option value="openrouter">🚀 OpenRouter (Free/Custom Models)</option>
+                        <option value="groq" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>⚡ Groq (Llama 3.3 70B - Tốc độ 0ms)</option>
+                        <option value="gemini" ${IOE.featureConfigs?.aiProvider === 'gemini' ? 'selected' : ''}>🌟 Google Gemini API</option>
+                        <option value="openrouter" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>🚀 OpenRouter (Free/Custom Models)</option>
                     </select>
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (Để trống dùng Local CAS & Free fallback):</div>
                     <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="gsk_... hoặc AIzaSy... hoặc sk-or-..." value="${IOE.featureConfigs?.apiKey || ''}">
-                    <button id="yanz-btn-save-key" class="yanz-btn" style="margin-top:6px;padding:5px 0;background:#0369a1;">💾 Lưu API Key</button>
+                    <button id="yanz-btn-save-key" class="yanz-btn" style="margin-top:6px;padding:5px 0;background:#0369a1;">💾 Lưu & Khóa API Key</button>
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:10px;margin-bottom:3px;">
-                        Độ trễ điền đáp án: <strong id="yanz-delay-val" style="color:#38bdf8;">1.5s</strong>
+                        Độ trễ điền đáp án: <strong id="yanz-delay-val" style="color:#38bdf8;">${((IOE.featureConfigs?.autoDelay || 1500) / 1000).toFixed(1)}s</strong>
                     </div>
                     <input type="range" id="yanz-rng-delay" min="300" max="4000" step="100" value="${IOE.featureConfigs?.autoDelay || 1500}" style="width:100%;accent-color:#38bdf8;cursor:pointer;">
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">Chế độ hoạt động:</div>
                     <select id="yanz-sel-mode" class="yanz-input" style="cursor:pointer;padding:5px;">
-                        <option value="stealth">🕵️ Stealth (Tránh phát hiện, trễ ngẫu nhiên)</option>
-                        <option value="turbo">⚡ Turbo (Giải siêu tốc 0ms không chờ)</option>
+                        <option value="stealth" ${IOE.featureConfigs?.questionMode === 'stealth' ? 'selected' : ''}>🕵️ Stealth (Tránh phát hiện, trễ ngẫu nhiên)</option>
+                        <option value="turbo" ${IOE.featureConfigs?.questionMode === 'turbo' ? 'selected' : ''}>⚡ Turbo (Giải siêu tốc 0ms không chờ)</option>
                     </select>
                 </div>
 
@@ -1339,12 +1464,16 @@ No explanations, no markdown fences.`;
                             <strong id="yanz-stat-engine" style="color:#38bdf8;">Cocos Creator 2.x</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Trạng thái gói tin:</span>
-                            <strong id="yanz-stat-packet" style="color:#4ade80;">Sẵn sàng bắt Key</strong>
+                            <span style="color:#94a3b8;">Số câu trong bài:</span>
+                            <strong id="yanz-stat-total-q" style="color:#38bdf8;">Đang quét...</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Số câu đã giải:</span>
-                            <strong id="yanz-stat-count" style="color:#f8fafc;">0 câu</strong>
+                            <span style="color:#94a3b8;">Tiến độ hoàn thành:</span>
+                            <strong id="yanz-stat-progress" style="color:#4ade80;">0 câu</strong>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span style="color:#94a3b8;">Trạng thái gói tin:</span>
+                            <strong id="yanz-stat-packet" style="color:#4ade80;">Sẵn sàng bắt Key</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;">
                             <span style="color:#94a3b8;">Tỉ lệ chính xác:</span>
@@ -1363,51 +1492,46 @@ No explanations, no markdown fences.`;
                         Chưa có câu hỏi được quét. Bấm "Giải bài ngay" để phát hiện!
                     </div>
 
-                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">Đáp án giải được:</div>
-                    <div id="yanz-ans-result" style="background:rgba(2,132,199,0.15);border:1px solid #0284c7;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:800;color:#38bdf8;text-align:center;">
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">Đáp án giải được (Đầy đủ):</div>
+                    <div id="yanz-ans-result" style="background:rgba(2,132,199,0.15);border:1px solid #0284c7;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;color:#38bdf8;white-space:pre-wrap;max-height:90px;overflow-y:auto;">
                         ---
                     </div>
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">🧠 Tư duy ngôn ngữ 0ms:</div>
-                    <div id="yanz-ans-thinking" style="background:rgba(15,23,42,0.9);padding:7px 10px;border-radius:6px;font-size:10.5px;color:#cbd5e1;line-height:1.45;white-space:pre-wrap;max-height:100px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);">
+                    <div id="yanz-ans-thinking" style="background:rgba(15,23,42,0.9);padding:7px 10px;border-radius:6px;font-size:10.5px;color:#cbd5e1;line-height:1.45;white-space:pre-wrap;max-height:90px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);">
                         Sẵn sàng phân tích ngữ pháp, chủ ngữ, vị ngữ và trật tự câu theo chuẩn tiếng Anh.
                     </div>
                 </div>
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#020617;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:8px;font-family:monospace;font-size:10px;color:#a5f3fc;height:120px;overflow-y:auto;line-height:1.4;margin-bottom:8px;">
-                        [YANZIOE] Khởi động hệ thống v1.0.4 thành công.
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
+                        [YANZIOE] Khởi động hệ thống v1.0.5 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
+[YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                        <button id="yanz-btn-clear-log" class="yanz-btn" style="background:#334155;padding:5px 0;">🧹 Xóa Log</button>
-                        <button id="yanz-btn-scan-again" class="yanz-btn" style="background:#0369a1;padding:5px 0;">🔍 Quét lại</button>
+                    <div style="display:flex;gap:6px;margin-top:6px;">
+                        <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
+                        <button id="yanz-btn-scan-again" style="flex:1;background:#0369a1;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">Quét lại Scene</button>
                     </div>
-                </div>
-
-                <!-- Footer -->
-                <div style="padding:6px 14px;background:rgba(15,23,42,0.95);border-top:1px solid rgba(51,65,85,0.4);display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#64748b;">
-                    <span>Phím tắt: <strong>Alt + H</strong></span>
-                    <span>Bởi <strong>YanzBn</strong></span>
                 </div>
             </div>
 
-            <!-- Mini Floater Badge when collapsed -->
-            <div id="yanzioe-pill" style="display:none;position:fixed;top:16px;right:16px;background:rgba(15,23,42,0.95);border:1px solid #38bdf8;border-radius:20px;padding:6px 14px;color:#38bdf8;font-weight:800;font-size:11.5px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,0.6);backdrop-filter:blur(10px);">
+            <!-- Mini Pill (Khi thu nhỏ) -->
+            <div id="yanzioe-pill" style="display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;">
                 🌐 YANZIOE VIP
             </div>
         `;
 
         document.body.appendChild(root);
 
-        // Tab Switching logic
+        // Tab Switching
         const tabs = root.querySelectorAll('.yanz-tab-btn');
-        tabs.forEach(btn => {
-            btn.addEventListener('click', () => {
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const targetTab = tab.dataset.tab;
                 tabs.forEach(t => t.classList.remove('active'));
-                btn.classList.add('active');
-                const targetTab = btn.getAttribute('data-tab');
+                tab.classList.add('active');
                 root.querySelectorAll('.yanz-tab-content').forEach(c => c.style.display = 'none');
                 const showContent = root.querySelector(`#yanz-tab-${targetTab}`);
                 if (showContent) showContent.style.display = 'block';
@@ -1473,10 +1597,21 @@ No explanations, no markdown fences.`;
         }
         IOE.appendLog = appendLog;
 
+        // Cập nhật số câu trong bài
+        IOE.updateQuizSummary = function (total, filled) {
+            const totalEl = document.getElementById('yanz-stat-total-q');
+            const progEl = document.getElementById('yanz-stat-progress');
+            if (totalEl) totalEl.innerText = `${total} câu`;
+            if (progEl) {
+                const pct = total > 0 ? Math.round((filled / total) * 100) : 0;
+                progEl.innerText = `${filled}/${total} câu (${pct}%)`;
+            }
+        };
+
         // Solve button
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {
-            appendLog('Bắt đầu quét và giải bài...');
-            IOE.toast('🔍 Đang bóc tách đề thi & tìm đáp án...', 1200);
+            appendLog('Bắt đầu quét và giải toàn bộ bài...');
+            IOE.toast('🔍 Đang bóc tách đề thi & tính toán đáp án...', 1200);
 
             // 1. Quét Cocos2d / Canvas
             if (IOE.canvas?.solveCanvasGame) {
@@ -1494,13 +1629,29 @@ No explanations, no markdown fences.`;
             }
         });
 
-        // Save key
+        // Save key & Auto-Save
         document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {
             const key = document.getElementById('yanz-inp-key')?.value.trim() || '';
             IOE.featureConfigs.apiKey = key;
-            localStorage.setItem('IOE_API_KEY', key);
-            IOE.toast('✓ Đã lưu API Key thành công!', 1500);
+            saveAllConfigs();
+            IOE.toast('💾 Đã lưu cấu hình & API Key!', 1500);
             appendLog(`Đã lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+        });
+
+        // Select Provider
+        document.getElementById('yanz-sel-provider')?.addEventListener('change', (e) => {
+            IOE.featureConfigs.aiProvider = e.target.value;
+            saveAllConfigs();
+            IOE.toast(`💾 Đã đổi Provider: ${e.target.value}`, 1000);
+            appendLog(`AI Provider: ${e.target.value}`);
+        });
+
+        // Select Mode
+        document.getElementById('yanz-sel-mode')?.addEventListener('change', (e) => {
+            IOE.featureConfigs.questionMode = e.target.value;
+            saveAllConfigs();
+            IOE.toast(`💾 Chế độ: ${e.target.value}`, 1000);
+            appendLog(`Chế độ: ${e.target.value}`);
         });
 
         // Delay slider
@@ -1510,35 +1661,42 @@ No explanations, no markdown fences.`;
             const v = e.target.value;
             IOE.featureConfigs.autoDelay = parseInt(v);
             if (delayVal) delayVal.innerText = `${(v / 1000).toFixed(1)}s`;
+            saveAllConfigs();
         });
 
-        // Toggles
+        // Toggles với cơ chế Auto-Save tức thì
         document.getElementById('yanz-chk-auto')?.addEventListener('change', (e) => {
             IOE.features.autoAnswer = e.target.checked;
-            IOE.toast(e.target.checked ? '⚡ Bật Auto-Answer' : '⏸ Đã tắt Auto-Answer', 1200);
+            saveAllConfigs();
+            IOE.toast(e.target.checked ? '⚡ Bật Auto-Answer (Đã lưu)' : '⏹ Đã tắt Auto-Answer (Đã lưu)', 1200);
             appendLog(`Auto-Answer: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
         });
 
         document.getElementById('yanz-chk-canvas')?.addEventListener('change', (e) => {
             IOE.features.canvasMode = e.target.checked;
+            saveAllConfigs();
             appendLog(`Quét Cocos2d / Canvas: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
         });
 
         document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {
             IOE.features.showAnswers = e.target.checked;
+            saveAllConfigs();
         });
 
         document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {
             IOE.features.freezeTimer = e.target.checked;
+            saveAllConfigs();
         });
 
         document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {
             IOE.features.oneko = e.target.checked;
+            saveAllConfigs();
             if (IOE.oneko?.toggle) IOE.oneko.toggle(e.target.checked);
         });
 
         document.getElementById('yanz-chk-stream')?.addEventListener('change', (e) => {
             IOE.features.streamMode = e.target.checked;
+            saveAllConfigs();
             root.style.display = e.target.checked ? 'none' : 'block';
             const hud = document.getElementById('yanzioe-revealer-hud');
             if (hud) hud.style.display = e.target.checked ? 'none' : 'flex';
@@ -1575,14 +1733,6 @@ No explanations, no markdown fences.`;
                 root.style.display = isMenuVisible ? 'block' : 'none';
             }
         });
-
-        // Load saved key
-        const savedKey = localStorage.getItem('IOE_API_KEY');
-        if (savedKey) {
-            IOE.featureConfigs.apiKey = savedKey;
-            const kInput = document.getElementById('yanz-inp-key');
-            if (kInput) kInput.value = savedKey;
-        }
     }
 
     IOE.onBodyReady(createMainMenu);

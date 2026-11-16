@@ -72,6 +72,7 @@
         features: {
             autoAnswer: false,
             showAnswers: true,
+            canvasMode: true,
             streamMode: false,
             oneko: false,
             rgbLogo: true,
