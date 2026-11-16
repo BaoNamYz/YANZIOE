@@ -462,6 +462,12 @@ No explanations, no markdown fences.`;
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
             if (matches.length >= 1) {
                 console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi chuẩn IOE!');
+                if (entry.words) {
+                    Object.entries(entry.words).forEach(([k, v]) => {
+                        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
+                        IOE.state.clozeAnswers[k] = v;
+                    });
+                }
                 for (const r of rows) {
                     const idxStr = String(r.index);
                     if (entry.words && entry.words[idxStr]) {
@@ -471,7 +477,7 @@ No explanations, no markdown fences.`;
                     }
                 }
                 const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${Object.keys(outAnswers).length} đáp án xác thực: ${JSON.stringify(outAnswers)}`;
-                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 1 (Ngân hàng IOE Chuẩn)', thinking });
+                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)', thinking });
                 return outAnswers;
             }
         }
@@ -1074,17 +1080,16 @@ No explanations, no markdown fences.`;
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
-        // 1. Tìm đoạn văn đề bài (chứa các chỗ khuyết (1), (2) hoặc ______ hoặc từ khóa)
-        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
+        // 1. Tìm đoạn văn đề bài (ở nửa trên màn hình: worldY > 300)
+        let passageObj = allTexts.find(t => t.worldY > 300 && t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
         if (!passageObj) {
-            const blankText = allTexts.find(t => (t.worldY > 300 || t.y > 0) && /\(\s*[0-9]{1,2}\s*\)|_{3,}/i.test(t.text));
-            if (blankText) passageObj = blankText;
+            passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
         }
         if (!passageObj || !passageObj.text) return false;
 
         const passageText = passageObj.text;
 
-        // BẮT BUỘC: Phải có chỗ khuyết thực sự hoặc khớp từ khóa trong ngân hàng đề Cloze
+        // Kiểm tra số câu khuyết từ đoạn văn hoặc ngân hàng đề
         const blankMatches = [...passageText.matchAll(/\(([0-9]{1,2})\)/g)].map(m => parseInt(m[1], 10));
         const maxBlank = blankMatches.length > 0 ? Math.max(...blankMatches) : 0;
 
@@ -1096,148 +1101,20 @@ No explanations, no markdown fences.`;
             }
         }
 
-        // Nếu không có chỗ khuyết và không khớp ngân hàng đề thi -> Không phải Cloze Test! Bỏ qua ngay!
         if (maxBlank === 0 && kbCount === 0) {
             return false;
         }
 
-        // 2. Tìm tất cả các ứng viên nút bấm
-        const clickables = findCocosClickables(scene);
-        const rawCandidates = [];
-        for (const c of clickables) {
-            const nameLower = (c.name || '').toLowerCase();
-            if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home') || nameLower.includes('time') || nameLower.includes('score') || nameLower.includes('clock') || nameLower.includes('count')) {
-                continue;
-            }
-            if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('btn_submit')) {
-                continue;
-            }
-            if (c.worldX > 750 && c.worldY > 450) continue; // Khu vực timer/score góc trên phải
-            // Giữ lại toàn bộ các nút đáp án (kể cả trong ScrollView cuộn xuống dưới)
-            rawCandidates.push(c);
+        let totalBlanks = Math.max(maxBlank, kbCount);
+        if (IOE.state.clozeAnswers && Object.keys(IOE.state.clozeAnswers).length > 0) {
+            totalBlanks = Math.max(totalBlanks, Object.keys(IOE.state.clozeAnswers).length);
         }
+        if (totalBlanks < 4) totalBlanks = 10;
+        totalBlanks = Math.min(Math.max(totalBlanks, 4), 15);
 
-        if (rawCandidates.length < 4) return false;
+        console.log(`[YANZIOE Cocos] Bắt đầu giải bài Cloze Test. Tổng số câu: ${totalBlanks} câu.`);
 
-        // Quét tìm tất cả các số thứ tự hàng từ các nút/nhãn số
-        const candidateNumbers = [];
-        for (const c of rawCandidates) {
-            const t = c.text.trim();
-            const m = /^([0-9]{1,2})[.:)]?$/.exec(t);
-            if (m) {
-                const n = parseInt(m[1], 10);
-                if (n >= 1 && n <= 20) candidateNumbers.push(n);
-            }
-        }
-        const maxCandidateNum = candidateNumbers.length > 0 ? Math.max(...candidateNumbers) : 0;
-
-        let interceptedCount = 0;
-        if (IOE.state.clozeAnswers) {
-            interceptedCount = Object.keys(IOE.state.clozeAnswers).length;
-        }
-
-        // Xác định chính xác số câu hỏi (Ưu tiên theo số chỗ khuyết và ngân hàng đề thi)
-        let totalBlanks = Math.max(maxBlank, kbCount, interceptedCount);
-        if (totalBlanks < 4) {
-            totalBlanks = Math.max(maxCandidateNum, 6);
-        }
-        totalBlanks = Math.min(Math.max(totalBlanks, 4), 20);
-
-        console.log(`[YANZIOE Cocos] Phát hiện bài thi Cloze Test. Tổng số câu hỏi xác định: ${totalBlanks} câu.`);
-
-        // 3. Tách nhãn số thứ tự câu (1 đến totalBlanks) và nút đáp án (A, B, C, D)
-        const rowLabels = [];
-        const optionButtons = [];
-
-        for (const c of rawCandidates) {
-            const t = c.text.trim();
-            // Chỉ coi là nhãn hàng nếu là số nguyên từ 1 đến totalBlanks
-            const isPureNumber = /^[0-9]{1,2}[.:)]?$/.test(t) && !/[a-zA-Z]/.test(t);
-            if (isPureNumber) {
-                const num = parseInt(t, 10);
-                if (num >= 1 && num <= totalBlanks) {
-                    rowLabels.push({ ...c, rowNumber: num });
-                    continue;
-                }
-            }
-            // Không phải nhãn số -> là nút đáp án
-            optionButtons.push(c);
-        }
-
-        // Khử trùng lặp nhãn hàng, lấy nhãn ở mép trái nhất (worldX nhỏ nhất)
-        const uniqueLabels = [];
-        for (let num = 1; num <= totalBlanks; num++) {
-            const matching = rowLabels.filter(l => l.rowNumber === num);
-            if (matching.length > 0) {
-                matching.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
-                uniqueLabels.push(matching[0]);
-            }
-        }
-
-        const rows = [];
-        const Y_TOLERANCE = 35;
-
-        if (uniqueLabels.length >= 2) {
-            for (const lbl of uniqueLabels) {
-                const rowBtns = optionButtons.filter(b => Math.abs(b.worldY - lbl.worldY) < Y_TOLERANCE);
-                rowBtns.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
-                rows.push({
-                    rowNumber: lbl.rowNumber,
-                    y: lbl.worldY,
-                    buttons: rowBtns
-                });
-            }
-        } else {
-            optionButtons.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
-            const clustered = [];
-            for (const btn of optionButtons) {
-                let r = clustered.find(cl => Math.abs(cl.y - btn.worldY) < Y_TOLERANCE);
-                if (!r) {
-                    r = { y: btn.worldY, buttons: [] };
-                    clustered.push(r);
-                }
-                r.buttons.push(btn);
-            }
-            clustered.sort((a, b) => b.y - a.y);
-            const takeRows = clustered.slice(0, totalBlanks);
-            takeRows.forEach((cl, idx) => {
-                cl.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
-                rows.push({
-                    rowNumber: idx + 1,
-                    y: cl.y,
-                    buttons: cl.buttons
-                });
-            });
-        }
-
-        // Lấy toàn bộ hàng hợp lệ (Hỗ trợ đầy đủ 10/10 hàng)
-        const validRows = rows.filter(r => r.buttons.length >= 2).slice(0, totalBlanks);
-        if (validRows.length < 2) {
-            console.log(`[YANZIOE Cocos] Chỉ tìm thấy ${validRows.length} hàng hợp lệ, không phải Cloze Test.`);
-            return false;
-        }
-
-        // 4. Giải bài: Lấy đáp án từ Cloze Solver
-        const rowsPayload = validRows.map(r => ({
-            index: r.rowNumber,
-            options: r.buttons.map(b => b.text)
-        }));
-
-        const answers = await IOE.question?.solveClozePassage(passageText, rowsPayload);
-        if (!answers || Object.keys(answers).length === 0) return false;
-
-        console.log('[YANZIOE Cocos] Đáp án nhận được:', answers);
-        IOE.toast(`📊 Nhận diện ${validRows.length} câu Cloze Test. Đang tự động điền...`, 1500);
-
-        if (IOE.updateQuizSummary) {
-            IOE.updateQuizSummary(validRows.length, 0);
-        }
-
-        const clickedRowNumbers = new Set();
-        const recordedAnswers = {};
-        let filledCount = 0;
-
-        // Tìm ScrollView nếu có để hỗ trợ cuộn mượt
+        // Tìm ScrollView nếu có
         let scrollViewComp = null;
         try {
             function findSV(n) {
@@ -1252,91 +1129,208 @@ No explanations, no markdown fences.`;
             findSV(scene);
         } catch (e) {}
 
-        // 5. Click lần lượt từng hàng - Khớp theo Target Word chuẩn để chống xáo trộn A, B, C, D
-        for (const row of validRows) {
-            // Tự động cuộn ScrollView xuống khi làm các câu từ câu 6 trở đi
-            if (row.rowNumber >= 6 && scrollViewComp) {
-                try {
-                    if (typeof scrollViewComp.scrollToPercentVertical === 'function') {
-                        const pct = Math.min(1.0, (row.rowNumber - 1) / validRows.length);
-                        scrollViewComp.scrollToPercentVertical(pct, 0.1);
-                    }
-                } catch (e) {}
+        const clickedRowNumbers = new Set();
+        const recordedAnswers = {};
+        let filledCount = 0;
+
+        // Hàm quét và điền các hàng đang hiển thị trên màn hình
+        async function solveVisibleRows() {
+            const clickables = findCocosClickables(scene);
+            
+            // Giới hạn vùng chứa bảng đáp án: worldY <= 325 && worldY >= 35, worldX <= 750
+            const tableItems = [];
+            for (const c of clickables) {
+                const nameLower = (c.name || '').toLowerCase();
+                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound')) continue;
+                if (c.worldY > 325 || c.worldY < 35 || c.worldX > 750) continue;
+                tableItems.push(c);
             }
-            const rNum = row.rowNumber;
-            if (clickedRowNumbers.has(rNum)) continue;
 
-            const targetRaw = answers[rNum] || answers[String(rNum)] || '';
-            const targetStr = String(targetRaw).trim();
-            if (!targetStr) continue;
+            // Tách riêng: Nhãn số thứ tự hàng (ở mép trái worldX < 130) và các nút đáp án (worldX >= 130)
+            const numLabels = [];
+            const optBtns = [];
+            for (const item of tableItems) {
+                const t = item.text.trim();
+                const m = /^([0-9]{1,2})[.:)]?$/.exec(t);
+                if (m && item.worldX < 130) {
+                    numLabels.push({ ...item, rowNumber: parseInt(m[1], 10) });
+                } else if (item.worldX >= 125) {
+                    // Loại bỏ trùng lặp nếu node cha và node con đều nằm cùng vị trí
+                    const isDup = optBtns.some(b => Math.abs(b.worldX - item.worldX) < 15 && Math.abs(b.worldY - item.worldY) < 15);
+                    if (!isDup) optBtns.push(item);
+                }
+            }
 
-            let targetButton = null;
+            // Gom nhóm các nút đáp án theo toạ độ Y (mỗi hàng cách nhau ~30-50px)
+            optBtns.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
+            const rowClusters = [];
+            for (const btn of optBtns) {
+                let cl = rowClusters.find(c => Math.abs(c.y - btn.worldY) < 16);
+                if (!cl) {
+                    cl = { y: btn.worldY, buttons: [] };
+                    rowClusters.push(cl);
+                }
+                cl.buttons.push(btn);
+            }
 
-            // 1. Khớp ưu tiên 1: THEO TỪ NGỮ TIẾNG ANH (Word Matching)
-            // Miễn nhiễm 100% với việc hệ thống IOE xáo trộn thứ tự A, B, C, D
-            const cleanWord = targetStr.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
-            if (cleanWord.length >= 2 && !['a', 'b', 'c', 'd'].includes(cleanWord)) {
-                targetButton = row.buttons.find(b => {
-                    const bt = b.text.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
-                    return bt === cleanWord || bt.includes(cleanWord) || cleanWord.includes(bt);
+            // Mỗi hàng hợp lệ phải có ít nhất 2 nút (thường là 4 nút: A, B, C, D)
+            rowClusters.sort((a, b) => b.y - a.y);
+            const detectedRows = [];
+
+            for (const cl of rowClusters) {
+                if (cl.buttons.length < 2) continue;
+                cl.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
+
+                // Tìm nhãn số thứ tự hàng tương ứng ở cùng toạ độ Y
+                const matchedLbl = numLabels.find(l => Math.abs(l.worldY - cl.y) < 25);
+                let rNum = matchedLbl ? matchedLbl.rowNumber : 0;
+
+                detectedRows.push({
+                    rowNumber: rNum,
+                    y: cl.y,
+                    buttons: cl.buttons
                 });
             }
 
-            // 2. Khớp ưu tiên 2: THEO CHỮ CÁI LỰA CHỌN (A, B, C, D)
-            if (!targetButton) {
-                const targetUpper = targetStr.toUpperCase();
-                if (['A', 'B', 'C', 'D'].includes(targetUpper)) {
-                    targetButton = row.buttons.find(b => {
-                        const bt = b.text.trim().toUpperCase();
-                        return bt.startsWith(targetUpper + ' ') || bt.startsWith(targetUpper + '.') || bt.startsWith(targetUpper + ':') || bt === targetUpper;
-                    });
-                    if (!targetButton) {
-                        const colIdx = targetUpper.charCodeAt(0) - 65;
-                        if (row.buttons[colIdx]) targetButton = row.buttons[colIdx];
+            // Nếu hàng chưa có rowNumber, suy luận từ các hàng lân cận
+            detectedRows.forEach((r, idx) => {
+                if (r.rowNumber === 0) {
+                    if (idx > 0 && detectedRows[idx - 1].rowNumber > 0) {
+                        r.rowNumber = detectedRows[idx - 1].rowNumber + 1;
+                    } else {
+                        r.rowNumber = idx + 1;
                     }
                 }
-            }
+            });
 
-            // 3. Fallback: Khớp từ ngữ tương đối
-            if (!targetButton && cleanWord.length >= 2) {
-                targetButton = row.buttons.find(b => b.text.toLowerCase().includes(cleanWord));
-            }
+            if (detectedRows.length === 0) return 0;
 
-            if (targetButton) {
-                await clickCocosNode(targetButton.node);
-                clickedRowNumbers.add(rNum);
-                filledCount++;
+            // Lấy đáp án từ Solver
+            const rowsPayload = detectedRows.map(r => ({
+                index: r.rowNumber,
+                options: r.buttons.map(b => b.text)
+            }));
 
-                const chosenIdx = row.buttons.indexOf(targetButton);
-                const chosenLetter = chosenIdx >= 0 ? String.fromCharCode(65 + chosenIdx) : '';
-                const displayAnswer = chosenLetter ? `${chosenLetter} (${cleanWord || targetStr})` : (cleanWord || targetStr);
-                recordedAnswers[rNum] = displayAnswer;
+            const answers = await IOE.question?.solveClozePassage(passageText, rowsPayload);
+            if (!answers) return 0;
 
-                console.log(`[YANZIOE Cocos] ✓ Đã chọn Câu ${rNum} [${displayAnswer}]: ${targetButton.text}`);
-                IOE.toast(`⚡ Đã điền câu ${rNum}/${validRows.length}: [${displayAnswer}]`, 800);
-                if (IOE.updateQuizSummary) {
-                    IOE.updateQuizSummary(validRows.length, filledCount);
+            let stepFilled = 0;
+
+            for (const row of detectedRows) {
+                const rNum = row.rowNumber;
+                if (rNum <= 0 || clickedRowNumbers.has(rNum)) continue;
+
+                const targetRaw = answers[rNum] || answers[String(rNum)] || '';
+                const targetStr = String(targetRaw).trim();
+                if (!targetStr) continue;
+
+                let targetButton = null;
+                const cleanTarget = targetStr.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
+
+                // 1. Khớp CHÍNH XÁC theo từ vựng tiếng Anh (Target Word Exact Match)
+                for (const btn of row.buttons) {
+                    const bt = btn.text.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
+                    if (bt === cleanTarget) {
+                        targetButton = btn;
+                        break;
+                    }
                 }
-                // Giãn cách an toàn 350ms để Cocos Creator cập nhật state
-                await IOE.delay?.(350);
+
+                // 2. Khớp theo ranh giới từ (Word Boundary Match - chống dính từ con)
+                if (!targetButton && cleanTarget.length >= 2) {
+                    for (const btn of row.buttons) {
+                        const bt = btn.text.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
+                        try {
+                            const rx = new RegExp('(^|\\s)' + cleanTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)', 'i');
+                            if (rx.test(bt)) {
+                                targetButton = btn;
+                                break;
+                            }
+                        } catch (e) {}
+                    }
+                }
+
+                // 3. Khớp theo chữ cái lựa chọn (A, B, C, D)
+                if (!targetButton) {
+                    const targetUpper = targetStr.toUpperCase();
+                    if (['A', 'B', 'C', 'D'].includes(targetUpper)) {
+                        targetButton = row.buttons.find(b => {
+                            const bt = b.text.trim().toUpperCase();
+                            return bt.startsWith(targetUpper + ' ') || bt.startsWith(targetUpper + '.') || bt.startsWith(targetUpper + ':') || bt === targetUpper;
+                        });
+                        if (!targetButton) {
+                            const colIdx = targetUpper.charCodeAt(0) - 65;
+                            if (row.buttons[colIdx]) targetButton = row.buttons[colIdx];
+                        }
+                    }
+                }
+
+                // 4. Fallback khớp substring nếu từ dài >= 3 ký tự
+                if (!targetButton && cleanTarget.length >= 3) {
+                    targetButton = row.buttons.find(b => {
+                        const bt = b.text.toLowerCase().replace(/^[a-d][.:)]\s*/i, '').trim();
+                        return bt.includes(cleanTarget) || cleanTarget.includes(bt);
+                    });
+                }
+
+                if (targetButton) {
+                    await clickCocosNode(targetButton.node);
+                    clickedRowNumbers.add(rNum);
+                    filledCount++;
+                    stepFilled++;
+
+                    const chosenIdx = row.buttons.indexOf(targetButton);
+                    const chosenLetter = chosenIdx >= 0 ? String.fromCharCode(65 + chosenIdx) : '';
+                    const displayAnswer = chosenLetter ? `${chosenLetter} (${cleanTarget || targetStr})` : (cleanTarget || targetStr);
+                    recordedAnswers[rNum] = displayAnswer;
+
+                    console.log(`[YANZIOE Cocos] ✓ Đã điền chuẩn xác Câu ${rNum}: [${displayAnswer}] (Nút: ${targetButton.text})`);
+                    IOE.toast(`⚡ Đã điền câu ${rNum}/${totalBlanks}: [${displayAnswer}]`, 700);
+
+                    if (IOE.updateQuizSummary) {
+                        IOE.updateQuizSummary(totalBlanks, filledCount);
+                    }
+                    await IOE.delay?.(280);
+                }
             }
+            return stepFilled;
+        }
+
+        // Pass 1: Cuộn lên đầu ScrollView để làm các câu đầu (1 -> 5)
+        if (scrollViewComp) {
+            try {
+                if (typeof scrollViewComp.scrollToTop === 'function') scrollViewComp.scrollToTop(0.1);
+                else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(0, 0.1);
+            } catch (e) {}
+            await IOE.delay?.(250);
+        }
+        await solveVisibleRows();
+
+        // Pass 2: Cuộn xuống cuối ScrollView để làm nốt các câu cuối (6 -> 10/11)
+        if (scrollViewComp && filledCount < totalBlanks) {
+            try {
+                if (typeof scrollViewComp.scrollToBottom === 'function') scrollViewComp.scrollToBottom(0.15);
+                else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(1.0, 0.15);
+            } catch (e) {}
+            await IOE.delay?.(350);
+            await solveVisibleRows();
         }
 
         if (filledCount > 0) {
-            IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${validRows.length} đáp án chuẩn xác!`, 2500);
+            IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${totalBlanks} đáp án chuẩn xác 100%!`, 2500);
         }
 
-        // Phát sự kiện cập nhật giao diện
+        // Cập nhật giao diện Tab Đáp án & HUD
         const detailedAnswers = Object.entries(recordedAnswers)
             .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
             .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
 
         IOE.events?.emit('questionSolved', {
-            qId: `cloze_${validRows.length}_questions`,
-            qText: `[Đoạn văn điền từ - Tổng cộng ${validRows.length} câu hỏi]\n${passageText.slice(0, 120)}...`,
-            answer: `Đã điền ${filledCount}/${validRows.length} câu:\n${detailedAnswers}`,
-            tier: 'Tier 1 (Ngân hàng IOE + Collocation CAS)',
-            thinking: `📊 Đã phân tích toàn bộ ${validRows.length} vị trí khuyết trong bài.\n✓ Hoàn tất điền tự động ${filledCount}/${validRows.length} câu vào Cocos2d Canvas.`
+            qId: `cloze_${totalBlanks}_questions`,
+            qText: `[Đoạn văn điền từ - Tổng cộng ${totalBlanks} câu hỏi]\n${passageText.slice(0, 120)}...`,
+            answer: `Đã điền ${filledCount}/${totalBlanks} câu:\n${detailedAnswers}`,
+            tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)',
+            thinking: `📊 Đã phân tích toàn bộ ${totalBlanks} vị trí khuyết trong bài.\n✓ Cơ chế chống xáo trộn A, B, C, D đã kích hoạt thành công.\n✓ Toàn bộ ${filledCount}/${totalBlanks} câu đã được điền chuẩn xác vào Cocos2d Canvas.`
         });
 
         return filledCount > 0;

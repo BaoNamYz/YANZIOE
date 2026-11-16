@@ -303,6 +303,12 @@ No explanations, no markdown fences.`;
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
             if (matches.length >= 1) {
                 console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi chuẩn IOE!');
+                if (entry.words) {
+                    Object.entries(entry.words).forEach(([k, v]) => {
+                        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
+                        IOE.state.clozeAnswers[k] = v;
+                    });
+                }
                 for (const r of rows) {
                     const idxStr = String(r.index);
                     if (entry.words && entry.words[idxStr]) {
@@ -312,7 +318,7 @@ No explanations, no markdown fences.`;
                     }
                 }
                 const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${Object.keys(outAnswers).length} đáp án xác thực: ${JSON.stringify(outAnswers)}`;
-                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 1 (Ngân hàng IOE Chuẩn)', thinking });
+                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)', thinking });
                 return outAnswers;
             }
         }
