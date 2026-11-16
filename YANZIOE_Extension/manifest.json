@@ -7,7 +7,9 @@
     {
       "matches": [
         "*://ioe.vn/*",
-        "*://*.ioe.vn/*"
+        "*://*.ioe.vn/*",
+        "*://*.go.vn/*",
+        "*://*.vtc.vn/*"
       ],
       "js": [
         "content.js"

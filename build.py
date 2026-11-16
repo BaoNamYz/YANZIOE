@@ -11,6 +11,7 @@ MODULES = [
     'utils/utils.js',
     'functions/oneko.js',
     'functions/questionSpoof.js',
+    'functions/canvasEngine.js',
     'functions/answerRevealer.js',
     'functions/autoAnswer.js',
     'visuals/mainMenu.js'
@@ -35,10 +36,12 @@ userscript_header = f"""// ==UserScript==
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
 // @version      {VERSION}
-// @description  Tool hỗ trợ giải bài và hiển thị đáp án Olympic tiếng Anh IOE.vn
+// @description  Tool hỗ trợ giải bài và hiển thị đáp án Olympic tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
 // @match        *://*.ioe.vn/*
+// @match        *://*.go.vn/*
+// @match        *://*.vtc.vn/*
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
@@ -64,7 +67,12 @@ manifest = {
     "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn",
     "content_scripts": [
         {
-            "matches": ["*://ioe.vn/*", "*://*.ioe.vn/*"],
+            "matches": [
+                "*://ioe.vn/*",
+                "*://*.ioe.vn/*",
+                "*://*.go.vn/*",
+                "*://*.vtc.vn/*"
+            ],
             "js": ["content.js"],
             "run_at": "document_start"
         }

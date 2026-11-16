@@ -1,12 +1,13 @@
 (function (global) {
     'use strict';
-    const IOE = global.IOE;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
     let isMenuVisible = true;
 
     function createMainMenu() {
-        if (document.getElementById('yanzioe-root')) return;
+        if (document.getElementById('yanzioe-root') || !document.body) return;
 
         const root = document.createElement('div');
         root.id = 'yanzioe-root';
@@ -95,7 +96,8 @@
         });
 
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', () => {
-            IOE.auto?.stepOnce?.();
+            if (IOE.canvas?.solveCanvasGame) IOE.canvas.solveCanvasGame();
+            if (IOE.auto?.stepOnce) IOE.auto.stepOnce();
         });
 
         document.getElementById('yanzioe-key-btn')?.addEventListener('click', () => {
@@ -138,9 +140,5 @@
         IOE.toast(active ? '🕵️ Kích hoạt Stream Mode (Ẩn giao diện)' : '👁 Tắt Stream Mode', 1200);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createMainMenu);
-    } else {
-        createMainMenu();
-    }
+    IOE.onBodyReady(createMainMenu);
 })(typeof window !== 'undefined' ? window : globalThis);

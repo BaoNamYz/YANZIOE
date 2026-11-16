@@ -2,10 +2,12 @@
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
 // @version      1.0.0
-// @description  Tool hỗ trợ giải bài và hiển thị đáp án Olympic tiếng Anh IOE.vn
+// @description  Tool hỗ trợ giải bài và hiển thị đáp án Olympic tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
 // @match        *://*.ioe.vn/*
+// @match        *://*.go.vn/*
+// @match        *://*.vtc.vn/*
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
@@ -16,6 +18,7 @@
 /* --- utils/utils.js --- */
 (function (global) {
     'use strict';
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
     class EventEmitter {
         constructor() { this._events = {}; }
@@ -26,23 +29,36 @@
 
     const events = new EventEmitter();
 
+    function onBodyReady(fn) {
+        if (document.body) { fn(); return; }
+        const obs = new MutationObserver(() => {
+            if (document.body) {
+                obs.disconnect();
+                fn();
+            }
+        });
+        obs.observe(document.documentElement || document, { childList: true, subtree: true });
+    }
+
     function toast(msg, duration = 2200) {
-        let box = document.getElementById('ioe-toast-box');
-        if (!box) {
-            box = document.createElement('div');
-            box.id = 'ioe-toast-box';
-            box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:99999999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
-            document.body.appendChild(box);
-        }
-        const el = document.createElement('div');
-        el.style.cssText = 'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);animation:ioeFade 0.25s ease-out;';
-        el.innerText = msg;
-        box.appendChild(el);
-        setTimeout(() => {
-            el.style.opacity = '0';
-            el.style.transition = 'opacity 0.3s ease';
-            setTimeout(() => el.remove(), 300);
-        }, duration);
+        onBodyReady(() => {
+            let box = document.getElementById('ioe-toast-box');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'ioe-toast-box';
+                box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:99999999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+                document.body.appendChild(box);
+            }
+            const el = document.createElement('div');
+            el.style.cssText = 'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);animation:ioeFade 0.25s ease-out;';
+            el.innerText = msg;
+            box.appendChild(el);
+            setTimeout(() => {
+                el.style.opacity = '0';
+                el.style.transition = 'opacity 0.3s ease';
+                setTimeout(() => el.remove(), 300);
+            }, duration);
+        });
     }
 
     function delay(ms) {
@@ -58,11 +74,12 @@
             .replace(/'/g, '&#039;');
     }
 
-    global.IOE = {
+    const ioeState = {
         events,
         toast,
         delay,
         escHtml,
+        onBodyReady,
         state: {
             isSolving: false,
             currentQuestionId: null,
@@ -84,6 +101,9 @@
             questionMode: 'stealth'
         }
     };
+
+    global.IOE = ioeState;
+    win.IOE = ioeState;
 })(typeof window !== 'undefined' ? window : globalThis);
 
 
@@ -382,17 +402,171 @@ Question: ${qText}${optsText}`;
 })(typeof window !== 'undefined' ? window : globalThis);
 
 
+/* --- functions/canvasEngine.js --- */
+(function (global) {
+    'use strict';
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = win.IOE || global.IOE;
+    if (!IOE) return;
+
+    /* ================= CREATEJS / ADOBE ANIMATE CANVAS ENGINE ================= */
+    function getStageAndRoot() {
+        const stage = win.stage || win.exportRoot?.stage || null;
+        const root = win.exportRoot || null;
+        return { stage, root };
+    }
+
+    // Đệ quy quét toàn bộ text hiển thị trong Canvas
+    function extractCanvasTexts(container, maxDepth = 6, curDepth = 0) {
+        if (!container || curDepth > maxDepth) return [];
+        const texts = [];
+        const children = container.children || [];
+        for (const child of children) {
+            if (child.text !== undefined && typeof child.text === 'string') {
+                const t = child.text.trim();
+                if (t && t.length > 1) texts.push({ obj: child, text: t });
+            }
+            if (child.children && child.children.length > 0) {
+                texts.push(...extractCanvasTexts(child, maxDepth, curDepth + 1));
+            }
+        }
+        return texts;
+    }
+
+    // Đệ quy tìm các nút bấm (MovieClip có event click hoặc mouseEnabled)
+    function findCanvasClickables(container, maxDepth = 6, curDepth = 0) {
+        if (!container || curDepth > maxDepth) return [];
+        const buttons = [];
+        const children = container.children || [];
+        for (const child of children) {
+            const hasListeners = child._listeners && (child._listeners.click || child._listeners.mousedown);
+            const isClickable = child.mouseEnabled || child.cursor === 'pointer' || hasListeners || /btn|choice|ans|opt/i.test(child.name || '');
+            if (isClickable) {
+                const innerTexts = extractCanvasTexts(child, 2).map(t => t.text).join(' ');
+                buttons.push({ obj: child, name: child.name || '', label: innerTexts });
+            }
+            if (child.children && child.children.length > 0) {
+                buttons.push(...findCanvasClickables(child, maxDepth, curDepth + 1));
+            }
+        }
+        return buttons;
+    }
+
+    // Kích hoạt click trên Canvas MovieClip / Button
+    function clickCanvasObject(obj) {
+        if (!obj) return false;
+        try {
+            if (win.createjs?.MouseEvent) {
+                const evtDown = new win.createjs.MouseEvent('mousedown', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
+                const evtClick = new win.createjs.MouseEvent('click', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
+                const evtUp = new win.createjs.MouseEvent('pressup', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
+                obj.dispatchEvent(evtDown);
+                obj.dispatchEvent(evtClick);
+                obj.dispatchEvent(evtUp);
+            } else {
+                obj.dispatchEvent('mousedown');
+                obj.dispatchEvent('click');
+                obj.dispatchEvent('pressup');
+            }
+            return true;
+        } catch (e) {
+            try {
+                if (typeof obj.onClick === 'function') obj.onClick();
+            } catch (err) {}
+            return false;
+        }
+    }
+
+    // Tự gõ đáp án vào Canvas Game bằng Keyboard Event
+    function typeIntoCanvas(ansStr) {
+        if (!ansStr) return;
+        const target = win.document.querySelector('canvas') || win;
+        for (let i = 0; i < ansStr.length; i++) {
+            const ch = ansStr[i];
+            const code = `Key${ch.toUpperCase()}`;
+            const keyEventProps = {
+                key: ch,
+                code: code,
+                charCode: ch.charCodeAt(0),
+                keyCode: ch.charCodeAt(0),
+                which: ch.charCodeAt(0),
+                bubbles: true,
+                cancelable: true
+            };
+            target.dispatchEvent(new KeyboardEvent('keydown', keyEventProps));
+            target.dispatchEvent(new KeyboardEvent('keypress', keyEventProps));
+            target.dispatchEvent(new KeyboardEvent('keyup', keyEventProps));
+        }
+        IOE.toast(`✍️ Đã gõ Canvas: ${ansStr}`, 1200);
+    }
+
+    // Quét câu hỏi và tự động giải trên Canvas
+    async function solveCanvasGame() {
+        const { root, stage } = getStageAndRoot();
+        if (!root && !stage) return false;
+
+        const texts = extractCanvasTexts(root || stage);
+        if (!texts.length) return false;
+
+        // Lọc câu hỏi dài nhất
+        const questionObj = texts.reduce((max, cur) => cur.text.length > max.text.length ? cur : max, texts[0]);
+        const qText = questionObj.text;
+        if (qText.length < 5) return false;
+
+        const buttons = findCanvasClickables(root || stage);
+        const options = buttons.map(b => b.label || b.name).filter(Boolean);
+
+        const qId = `canvas_${qText.slice(0, 30)}`;
+        let meta = IOE.state.solvedMeta.get(qId);
+        if (!meta) {
+            meta = await IOE.question.solveQuestion(qId, qText, options);
+        }
+
+        if (meta?.answer) {
+            const ans = meta.answer.trim().toLowerCase();
+            // Nếu có các nút trắc nghiệm trong Canvas
+            if (buttons.length > 0) {
+                const matchedBtn = buttons.find(b => {
+                    const l = (b.label || '').toLowerCase();
+                    const n = (b.name || '').toLowerCase();
+                    return l.includes(ans) || ans.includes(l) || n.includes(ans) || (ans === 'a' && /a\b|opt0|btn1/i.test(n));
+                });
+                if (matchedBtn) {
+                    clickCanvasObject(matchedBtn.obj);
+                    IOE.toast(`🎯 Canvas Click: ${matchedBtn.label || matchedBtn.name}`, 1200);
+                    return true;
+                }
+            }
+            // Nếu là dạng điền từ
+            typeIntoCanvas(meta.answer);
+            return true;
+        }
+        return false;
+    }
+
+    IOE.canvas = {
+        getStageAndRoot,
+        extractCanvasTexts,
+        findCanvasClickables,
+        clickCanvasObject,
+        typeIntoCanvas,
+        solveCanvasGame
+    };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+
 /* --- functions/answerRevealer.js --- */
 (function (global) {
     'use strict';
-    const IOE = global.IOE;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
     const HUD_ID = 'yanzioe-revealer-hud';
 
     function ensureHud() {
         let hud = document.getElementById(HUD_ID);
-        if (!hud) {
+        if (!hud && document.body) {
             hud = document.createElement('div');
             hud.id = HUD_ID;
             hud.style.cssText = `
@@ -429,6 +603,8 @@ Question: ${qText}${optsText}`;
         }
 
         const hud = ensureHud();
+        if (!hud) return;
+
         const safeTier = IOE.escHtml(meta.tier || 'AI');
         const safeAns = IOE.escHtml(meta.answer || '');
         const safeThink = IOE.escHtml(meta.thinking || '');
@@ -450,7 +626,8 @@ Question: ${qText}${optsText}`;
         `;
 
         document.getElementById('yanzioe-fill-btn')?.addEventListener('click', () => {
-            IOE.auto?.fillAnswer?.(meta.answer);
+            if (IOE.auto?.fillAnswer) IOE.auto.fillAnswer(meta.answer);
+            if (IOE.canvas?.typeIntoCanvas) IOE.canvas.typeIntoCanvas(meta.answer);
         });
 
         const copyAction = () => {
@@ -597,13 +774,14 @@ Question: ${qText}${optsText}`;
 /* --- visuals/mainMenu.js --- */
 (function (global) {
     'use strict';
-    const IOE = global.IOE;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
     let isMenuVisible = true;
 
     function createMainMenu() {
-        if (document.getElementById('yanzioe-root')) return;
+        if (document.getElementById('yanzioe-root') || !document.body) return;
 
         const root = document.createElement('div');
         root.id = 'yanzioe-root';
@@ -692,7 +870,8 @@ Question: ${qText}${optsText}`;
         });
 
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', () => {
-            IOE.auto?.stepOnce?.();
+            if (IOE.canvas?.solveCanvasGame) IOE.canvas.solveCanvasGame();
+            if (IOE.auto?.stepOnce) IOE.auto.stepOnce();
         });
 
         document.getElementById('yanzioe-key-btn')?.addEventListener('click', () => {
@@ -735,9 +914,5 @@ Question: ${qText}${optsText}`;
         IOE.toast(active ? '🕵️ Kích hoạt Stream Mode (Ẩn giao diện)' : '👁 Tắt Stream Mode', 1200);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createMainMenu);
-    } else {
-        createMainMenu();
-    }
+    IOE.onBodyReady(createMainMenu);
 })(typeof window !== 'undefined' ? window : globalThis);

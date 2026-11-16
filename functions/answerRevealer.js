@@ -1,13 +1,14 @@
 (function (global) {
     'use strict';
-    const IOE = global.IOE;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
     const HUD_ID = 'yanzioe-revealer-hud';
 
     function ensureHud() {
         let hud = document.getElementById(HUD_ID);
-        if (!hud) {
+        if (!hud && document.body) {
             hud = document.createElement('div');
             hud.id = HUD_ID;
             hud.style.cssText = `
@@ -44,6 +45,8 @@
         }
 
         const hud = ensureHud();
+        if (!hud) return;
+
         const safeTier = IOE.escHtml(meta.tier || 'AI');
         const safeAns = IOE.escHtml(meta.answer || '');
         const safeThink = IOE.escHtml(meta.thinking || '');
@@ -65,7 +68,8 @@
         `;
 
         document.getElementById('yanzioe-fill-btn')?.addEventListener('click', () => {
-            IOE.auto?.fillAnswer?.(meta.answer);
+            if (IOE.auto?.fillAnswer) IOE.auto.fillAnswer(meta.answer);
+            if (IOE.canvas?.typeIntoCanvas) IOE.canvas.typeIntoCanvas(meta.answer);
         });
 
         const copyAction = () => {
