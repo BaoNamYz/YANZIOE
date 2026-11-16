@@ -22,7 +22,17 @@
         obs.observe(document.documentElement || document, { childList: true, subtree: true });
     }
 
+    let lastToastMsg = '';
+    let lastToastTime = 0;
+
     function toast(msg, duration = 2200) {
+        const now = Date.now();
+        if (msg === lastToastMsg && (now - lastToastTime) < 2500) {
+            return; // Chặn spam cùng 1 toast trong 2.5s
+        }
+        lastToastMsg = msg;
+        lastToastTime = now;
+
         onBodyReady(() => {
             let box = document.getElementById('ioe-toast-box');
             if (!box) {
@@ -79,7 +89,14 @@
             freezeTimer: true
         },
         featureConfigs: {
-            apiKey: (typeof localStorage !== 'undefined' ? localStorage.getItem('IOE_API_KEY') || '' : ''),
+            apiKey: (function () {
+                try {
+                    if (typeof localStorage !== 'undefined') {
+                        return localStorage.getItem('IOE_API_KEY') || localStorage.getItem('YANZIOE_API_KEY') || '';
+                    }
+                } catch (e) {}
+                return '';
+            })(),
             autoDelay: 1500,
             questionMode: 'stealth'
         }

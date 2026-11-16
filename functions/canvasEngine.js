@@ -238,23 +238,40 @@
         // 1. Tìm đoạn văn đề bài (chứa các chỗ khuyết (1), (2) hoặc ______ hoặc từ khóa)
         let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
         if (!passageObj) {
-            const upperTexts = allTexts.filter(t => (t.worldY > 350 || t.y > 0) && t.text.length > 25);
-            if (upperTexts.length > 0) {
-                passageObj = { text: upperTexts.map(t => t.text).join(' ') };
-            }
+            const blankText = allTexts.find(t => (t.worldY > 300 || t.y > 0) && /\(\s*[0-9]{1,2}\s*\)|_{3,}/i.test(t.text));
+            if (blankText) passageObj = blankText;
         }
         if (!passageObj || !passageObj.text) return false;
 
         const passageText = passageObj.text;
+
+        // BẮT BUỘC: Phải có chỗ khuyết thực sự hoặc khớp từ khóa trong ngân hàng đề Cloze
+        const blankMatches = [...passageText.matchAll(/\(([0-9]{1,2})\)/g)].map(m => parseInt(m[1], 10));
+        const maxBlank = blankMatches.length > 0 ? Math.max(...blankMatches) : 0;
+
+        let kbCount = 0;
+        const normPass = passageText.toLowerCase();
+        for (const entry of (IOE.CLOZE_KNOWLEDGE_BANK || [])) {
+            if (entry.keywords.some(k => normPass.includes(k.toLowerCase()))) {
+                kbCount = Math.max(kbCount, Object.keys(entry.words || entry.answers || {}).length);
+            }
+        }
+
+        // Nếu không có chỗ khuyết và không khớp ngân hàng đề thi -> Không phải Cloze Test! Bỏ qua ngay!
+        if (maxBlank === 0 && kbCount === 0) {
+            return false;
+        }
 
         // 2. Tìm tất cả các ứng viên nút bấm
         const clickables = findCocosClickables(scene);
         const rawCandidates = [];
         for (const c of clickables) {
             const nameLower = (c.name || '').toLowerCase();
-            if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home')) {
+            if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home') || nameLower.includes('time') || nameLower.includes('score') || nameLower.includes('clock') || nameLower.includes('count')) {
                 continue;
             }
+            if (c.worldX > 750 && c.worldY > 450) continue; // Khu vực timer/score
+            if (c.worldY < 50) continue; // Khu vực thanh đáy
             rawCandidates.push(c);
         }
 
@@ -267,32 +284,22 @@
             const m = /^([0-9]{1,2})[.:)]?$/.exec(t);
             if (m) {
                 const n = parseInt(m[1], 10);
-                if (n >= 1 && n <= 30) candidateNumbers.push(n);
+                if (n >= 1 && n <= 20) candidateNumbers.push(n);
             }
         }
         const maxCandidateNum = candidateNumbers.length > 0 ? Math.max(...candidateNumbers) : 0;
-
-        // Đếm số chỗ khuyết trong đề bài bằng regex: (1), (2), (3)...
-        const blankMatches = [...passageText.matchAll(/\((\d+)\)/g)].map(m => parseInt(m[1], 10));
-        const maxBlank = blankMatches.length > 0 ? Math.max(...blankMatches) : 0;
-
-        // Quét ngân hàng kiến thức chuẩn
-        let kbCount = 0;
-        const normPass = passageText.toLowerCase();
-        for (const entry of (IOE.CLOZE_KNOWLEDGE_BANK || [])) {
-            if (entry.keywords.some(k => normPass.includes(k.toLowerCase()))) {
-                kbCount = Math.max(kbCount, Object.keys(entry.words || entry.answers || {}).length);
-            }
-        }
 
         let interceptedCount = 0;
         if (IOE.state.clozeAnswers) {
             interceptedCount = Object.keys(IOE.state.clozeAnswers).length;
         }
 
-        // Động thái xác định đúng số câu hỏi (Hỗ trợ 10 câu, lên tới 25 câu - Không giới hạn ở 8)
-        let totalBlanks = Math.max(maxCandidateNum, maxBlank, kbCount, interceptedCount, 10);
-        totalBlanks = Math.min(Math.max(totalBlanks, 4), 25);
+        // Xác định chính xác số câu hỏi (Ưu tiên theo số chỗ khuyết và ngân hàng đề thi)
+        let totalBlanks = Math.max(maxBlank, kbCount, interceptedCount);
+        if (totalBlanks < 4) {
+            totalBlanks = Math.max(maxCandidateNum, 6);
+        }
+        totalBlanks = Math.min(Math.max(totalBlanks, 4), 20);
 
         console.log(`[YANZIOE Cocos] Phát hiện bài thi Cloze Test. Tổng số câu hỏi xác định: ${totalBlanks} câu.`);
 
@@ -368,13 +375,6 @@
             return false;
         }
 
-        console.log(`[YANZIOE Cocos] Nhận diện chuẩn xác ${validRows.length}/${totalBlanks} hàng câu hỏi Cloze Test.`);
-        IOE.toast(`📊 Bài thi gồm đúng ${validRows.length} câu hỏi. Đang tự động điền...`, 1800);
-
-        if (IOE.updateQuizSummary) {
-            IOE.updateQuizSummary(validRows.length, 0);
-        }
-
         // 4. Giải bài: Lấy đáp án từ Cloze Solver
         const rowsPayload = validRows.map(r => ({
             index: r.rowNumber,
@@ -385,6 +385,11 @@
         if (!answers || Object.keys(answers).length === 0) return false;
 
         console.log('[YANZIOE Cocos] Đáp án nhận được:', answers);
+        IOE.toast(`📊 Nhận diện ${validRows.length} câu Cloze Test. Đang tự động điền...`, 1500);
+
+        if (IOE.updateQuizSummary) {
+            IOE.updateQuizSummary(validRows.length, 0);
+        }
 
         const clickedRowNumbers = new Set();
         const recordedAnswers = {};
@@ -448,7 +453,9 @@
             }
         }
 
-        IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${validRows.length} đáp án chuẩn xác!`, 2500);
+        if (filledCount > 0) {
+            IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${validRows.length} đáp án chuẩn xác!`, 2500);
+        }
 
         // Phát sự kiện cập nhật giao diện
         const detailedAnswers = Object.entries(recordedAnswers)
@@ -525,33 +532,63 @@
             const meta = await IOE.question?.solveQuestion(null, promptContext, words);
             if (!meta || !meta.answer) return false;
 
-            const targetWords = String(meta.answer).trim().split(/\s+/);
-            const usedBlocks = new Set();
-            let clickedCount = 0;
+            const fullTarget = String(meta.answer).trim().toLowerCase().replace(/[^a-z0-9\s]/g, '');
+            const availableBlocks = wordBlocks.slice();
+            const clickOrder = [];
+            let remaining = fullTarget;
 
-            for (const tw of targetWords) {
-                const cleanTarget = tw.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!cleanTarget) continue;
+            // Thuật toán so khớp tuần tự từng khối từ (hỗ trợ cả khối 1 từ và cụm 2-3 từ)
+            while (remaining.length > 0 && availableBlocks.length > 0) {
+                remaining = remaining.trim();
+                let foundMatch = false;
 
-                const block = wordBlocks.find(b => {
-                    if (usedBlocks.has(b)) return false;
-                    const cleanBlock = b.text.toLowerCase().replace(/[^a-z0-9]/g, '');
-                    return cleanBlock === cleanTarget;
-                });
+                for (let i = 0; i < availableBlocks.length; i++) {
+                    const block = availableBlocks[i];
+                    const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+                    if (!cleanBlock) continue;
 
-                if (block) {
-                    await clickCocosNode(block.node);
-                    usedBlocks.add(block);
-                    clickedCount++;
-                    await IOE.delay?.(250);
+                    if (remaining.startsWith(cleanBlock)) {
+                        clickOrder.push(block);
+                        availableBlocks.splice(i, 1);
+                        remaining = remaining.slice(cleanBlock.length).trim();
+                        foundMatch = true;
+                        break;
+                    }
+                }
+
+                if (!foundMatch) {
+                    let bestIdx = -1;
+                    for (let i = 0; i < availableBlocks.length; i++) {
+                        const cleanBlock = availableBlocks[i].text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+                        const firstWord = cleanBlock.split(/\s+/)[0];
+                        if (firstWord && remaining.startsWith(firstWord)) {
+                            bestIdx = i;
+                            break;
+                        }
+                    }
+                    if (bestIdx >= 0) {
+                        const block = availableBlocks[bestIdx];
+                        clickOrder.push(block);
+                        availableBlocks.splice(bestIdx, 1);
+                        const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+                        remaining = remaining.replace(cleanBlock, '').trim();
+                    } else {
+                        break;
+                    }
                 }
             }
 
-            if (clickedCount >= 3) {
+            // Click lần lượt các block theo đúng thứ tự
+            for (const block of clickOrder) {
+                await clickCocosNode(block.node);
+                await IOE.delay?.(280);
+            }
+
+            if (clickOrder.length >= 2) {
                 if (answerBtn) {
-                    await IOE.delay?.(350);
+                    await IOE.delay?.(400);
                     await clickCocosNode(answerBtn.node);
-                    IOE.toast('🎉 Đã bấm ANSWER hoàn tất Ghép câu!', 1500);
+                    IOE.toast(`🎉 Đã bấm ANSWER hoàn tất Ghép câu! (${clickOrder.length} khối)`, 1500);
                 }
                 return true;
             }

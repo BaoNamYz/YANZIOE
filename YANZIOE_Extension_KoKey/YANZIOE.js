@@ -23,7 +23,17 @@
         obs.observe(document.documentElement || document, { childList: true, subtree: true });
     }
 
+    let lastToastMsg = '';
+    let lastToastTime = 0;
+
     function toast(msg, duration = 2200) {
+        const now = Date.now();
+        if (msg === lastToastMsg && (now - lastToastTime) < 2500) {
+            return; // Chặn spam cùng 1 toast trong 2.5s
+        }
+        lastToastMsg = msg;
+        lastToastTime = now;
+
         onBodyReady(() => {
             let box = document.getElementById('ioe-toast-box');
             if (!box) {
@@ -80,7 +90,14 @@
             freezeTimer: true
         },
         featureConfigs: {
-            apiKey: (typeof localStorage !== 'undefined' ? localStorage.getItem('IOE_API_KEY') || '' : ''),
+            apiKey: (function () {
+                try {
+                    if (typeof localStorage !== 'undefined') {
+                        return localStorage.getItem('IOE_API_KEY') || localStorage.getItem('YANZIOE_API_KEY') || '';
+                    }
+                } catch (e) {}
+                return '';
+            })(),
             autoDelay: 1500,
             questionMode: 'stealth'
         }
@@ -927,23 +944,40 @@ No explanations, no markdown fences.`;
         // 1. Tìm đoạn văn đề bài (chứa các chỗ khuyết (1), (2) hoặc ______ hoặc từ khóa)
         let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
         if (!passageObj) {
-            const upperTexts = allTexts.filter(t => (t.worldY > 350 || t.y > 0) && t.text.length > 25);
-            if (upperTexts.length > 0) {
-                passageObj = { text: upperTexts.map(t => t.text).join(' ') };
-            }
+            const blankText = allTexts.find(t => (t.worldY > 300 || t.y > 0) && /\(\s*[0-9]{1,2}\s*\)|_{3,}/i.test(t.text));
+            if (blankText) passageObj = blankText;
         }
         if (!passageObj || !passageObj.text) return false;
 
         const passageText = passageObj.text;
+
+        // BẮT BUỘC: Phải có chỗ khuyết thực sự hoặc khớp từ khóa trong ngân hàng đề Cloze
+        const blankMatches = [...passageText.matchAll(/\(([0-9]{1,2})\)/g)].map(m => parseInt(m[1], 10));
+        const maxBlank = blankMatches.length > 0 ? Math.max(...blankMatches) : 0;
+
+        let kbCount = 0;
+        const normPass = passageText.toLowerCase();
+        for (const entry of (IOE.CLOZE_KNOWLEDGE_BANK || [])) {
+            if (entry.keywords.some(k => normPass.includes(k.toLowerCase()))) {
+                kbCount = Math.max(kbCount, Object.keys(entry.words || entry.answers || {}).length);
+            }
+        }
+
+        // Nếu không có chỗ khuyết và không khớp ngân hàng đề thi -> Không phải Cloze Test! Bỏ qua ngay!
+        if (maxBlank === 0 && kbCount === 0) {
+            return false;
+        }
 
         // 2. Tìm tất cả các ứng viên nút bấm
         const clickables = findCocosClickables(scene);
         const rawCandidates = [];
         for (const c of clickables) {
             const nameLower = (c.name || '').toLowerCase();
-            if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home')) {
+            if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home') || nameLower.includes('time') || nameLower.includes('score') || nameLower.includes('clock') || nameLower.includes('count')) {
                 continue;
             }
+            if (c.worldX > 750 && c.worldY > 450) continue; // Khu vực timer/score
+            if (c.worldY < 50) continue; // Khu vực thanh đáy
             rawCandidates.push(c);
         }
 
@@ -956,32 +990,22 @@ No explanations, no markdown fences.`;
             const m = /^([0-9]{1,2})[.:)]?$/.exec(t);
             if (m) {
                 const n = parseInt(m[1], 10);
-                if (n >= 1 && n <= 30) candidateNumbers.push(n);
+                if (n >= 1 && n <= 20) candidateNumbers.push(n);
             }
         }
         const maxCandidateNum = candidateNumbers.length > 0 ? Math.max(...candidateNumbers) : 0;
-
-        // Đếm số chỗ khuyết trong đề bài bằng regex: (1), (2), (3)...
-        const blankMatches = [...passageText.matchAll(/\((\d+)\)/g)].map(m => parseInt(m[1], 10));
-        const maxBlank = blankMatches.length > 0 ? Math.max(...blankMatches) : 0;
-
-        // Quét ngân hàng kiến thức chuẩn
-        let kbCount = 0;
-        const normPass = passageText.toLowerCase();
-        for (const entry of (IOE.CLOZE_KNOWLEDGE_BANK || [])) {
-            if (entry.keywords.some(k => normPass.includes(k.toLowerCase()))) {
-                kbCount = Math.max(kbCount, Object.keys(entry.words || entry.answers || {}).length);
-            }
-        }
 
         let interceptedCount = 0;
         if (IOE.state.clozeAnswers) {
             interceptedCount = Object.keys(IOE.state.clozeAnswers).length;
         }
 
-        // Động thái xác định đúng số câu hỏi (Hỗ trợ 10 câu, lên tới 25 câu - Không giới hạn ở 8)
-        let totalBlanks = Math.max(maxCandidateNum, maxBlank, kbCount, interceptedCount, 10);
-        totalBlanks = Math.min(Math.max(totalBlanks, 4), 25);
+        // Xác định chính xác số câu hỏi (Ưu tiên theo số chỗ khuyết và ngân hàng đề thi)
+        let totalBlanks = Math.max(maxBlank, kbCount, interceptedCount);
+        if (totalBlanks < 4) {
+            totalBlanks = Math.max(maxCandidateNum, 6);
+        }
+        totalBlanks = Math.min(Math.max(totalBlanks, 4), 20);
 
         console.log(`[YANZIOE Cocos] Phát hiện bài thi Cloze Test. Tổng số câu hỏi xác định: ${totalBlanks} câu.`);
 
@@ -1057,13 +1081,6 @@ No explanations, no markdown fences.`;
             return false;
         }
 
-        console.log(`[YANZIOE Cocos] Nhận diện chuẩn xác ${validRows.length}/${totalBlanks} hàng câu hỏi Cloze Test.`);
-        IOE.toast(`📊 Bài thi gồm đúng ${validRows.length} câu hỏi. Đang tự động điền...`, 1800);
-
-        if (IOE.updateQuizSummary) {
-            IOE.updateQuizSummary(validRows.length, 0);
-        }
-
         // 4. Giải bài: Lấy đáp án từ Cloze Solver
         const rowsPayload = validRows.map(r => ({
             index: r.rowNumber,
@@ -1074,6 +1091,11 @@ No explanations, no markdown fences.`;
         if (!answers || Object.keys(answers).length === 0) return false;
 
         console.log('[YANZIOE Cocos] Đáp án nhận được:', answers);
+        IOE.toast(`📊 Nhận diện ${validRows.length} câu Cloze Test. Đang tự động điền...`, 1500);
+
+        if (IOE.updateQuizSummary) {
+            IOE.updateQuizSummary(validRows.length, 0);
+        }
 
         const clickedRowNumbers = new Set();
         const recordedAnswers = {};
@@ -1137,7 +1159,9 @@ No explanations, no markdown fences.`;
             }
         }
 
-        IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${validRows.length} đáp án chuẩn xác!`, 2500);
+        if (filledCount > 0) {
+            IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${validRows.length} đáp án chuẩn xác!`, 2500);
+        }
 
         // Phát sự kiện cập nhật giao diện
         const detailedAnswers = Object.entries(recordedAnswers)
@@ -1214,33 +1238,63 @@ No explanations, no markdown fences.`;
             const meta = await IOE.question?.solveQuestion(null, promptContext, words);
             if (!meta || !meta.answer) return false;
 
-            const targetWords = String(meta.answer).trim().split(/\s+/);
-            const usedBlocks = new Set();
-            let clickedCount = 0;
+            const fullTarget = String(meta.answer).trim().toLowerCase().replace(/[^a-z0-9\s]/g, '');
+            const availableBlocks = wordBlocks.slice();
+            const clickOrder = [];
+            let remaining = fullTarget;
 
-            for (const tw of targetWords) {
-                const cleanTarget = tw.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!cleanTarget) continue;
+            // Thuật toán so khớp tuần tự từng khối từ (hỗ trợ cả khối 1 từ và cụm 2-3 từ)
+            while (remaining.length > 0 && availableBlocks.length > 0) {
+                remaining = remaining.trim();
+                let foundMatch = false;
 
-                const block = wordBlocks.find(b => {
-                    if (usedBlocks.has(b)) return false;
-                    const cleanBlock = b.text.toLowerCase().replace(/[^a-z0-9]/g, '');
-                    return cleanBlock === cleanTarget;
-                });
+                for (let i = 0; i < availableBlocks.length; i++) {
+                    const block = availableBlocks[i];
+                    const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+                    if (!cleanBlock) continue;
 
-                if (block) {
-                    await clickCocosNode(block.node);
-                    usedBlocks.add(block);
-                    clickedCount++;
-                    await IOE.delay?.(250);
+                    if (remaining.startsWith(cleanBlock)) {
+                        clickOrder.push(block);
+                        availableBlocks.splice(i, 1);
+                        remaining = remaining.slice(cleanBlock.length).trim();
+                        foundMatch = true;
+                        break;
+                    }
+                }
+
+                if (!foundMatch) {
+                    let bestIdx = -1;
+                    for (let i = 0; i < availableBlocks.length; i++) {
+                        const cleanBlock = availableBlocks[i].text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+                        const firstWord = cleanBlock.split(/\s+/)[0];
+                        if (firstWord && remaining.startsWith(firstWord)) {
+                            bestIdx = i;
+                            break;
+                        }
+                    }
+                    if (bestIdx >= 0) {
+                        const block = availableBlocks[bestIdx];
+                        clickOrder.push(block);
+                        availableBlocks.splice(bestIdx, 1);
+                        const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+                        remaining = remaining.replace(cleanBlock, '').trim();
+                    } else {
+                        break;
+                    }
                 }
             }
 
-            if (clickedCount >= 3) {
+            // Click lần lượt các block theo đúng thứ tự
+            for (const block of clickOrder) {
+                await clickCocosNode(block.node);
+                await IOE.delay?.(280);
+            }
+
+            if (clickOrder.length >= 2) {
                 if (answerBtn) {
-                    await IOE.delay?.(350);
+                    await IOE.delay?.(400);
                     await clickCocosNode(answerBtn.node);
-                    IOE.toast('🎉 Đã bấm ANSWER hoàn tất Ghép câu!', 1500);
+                    IOE.toast(`🎉 Đã bấm ANSWER hoàn tất Ghép câu! (${clickOrder.length} khối)`, 1500);
                 }
                 return true;
             }
@@ -1610,31 +1664,65 @@ No explanations, no markdown fences.`;
     const STORAGE_KEY = 'YANZIOE_CONFIG_VIP_V1';
 
     function loadSavedConfig() {
+        let bestKey = '';
         try {
+            // Quét tất cả các kho lưu trữ tiềm năng để tìm API key còn lưu
+            const candidates = [
+                IOE.featureConfigs?.apiKey,
+                localStorage.getItem('IOE_API_KEY'),
+                localStorage.getItem('YANZIOE_API_KEY'),
+                (function () {
+                    const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || '');
+                    return m ? decodeURIComponent(m[1]) : '';
+                })(),
+                (typeof GM_getValue !== 'undefined' ? GM_getValue('IOE_API_KEY') : '')
+            ];
+            for (const c of candidates) {
+                if (c && typeof c === 'string' && c.trim().length > 5) {
+                    bestKey = c.trim();
+                    break;
+                }
+            }
+
             const raw = localStorage.getItem(STORAGE_KEY);
             if (raw) {
                 const parsed = JSON.parse(raw);
                 if (parsed.features) Object.assign(IOE.features, parsed.features);
-                if (parsed.configs) Object.assign(IOE.featureConfigs, parsed.configs);
-                return parsed;
+                if (parsed.configs) {
+                    const savedApiKey = parsed.configs.apiKey;
+                    delete parsed.configs.apiKey; // Không để chuỗi rỗng ghi đè key hợp lệ
+                    Object.assign(IOE.featureConfigs, parsed.configs);
+                    if (savedApiKey && savedApiKey.trim().length > 5 && !bestKey) {
+                        bestKey = savedApiKey.trim();
+                    }
+                }
             }
         } catch (e) {}
-        // Fallback key cũ
-        const oldKey = localStorage.getItem('IOE_API_KEY');
-        if (oldKey && !IOE.featureConfigs.apiKey) IOE.featureConfigs.apiKey = oldKey;
+
+        if (bestKey) {
+            IOE.featureConfigs.apiKey = bestKey;
+        }
         return null;
     }
 
     function saveAllConfigs() {
         try {
+            const key = (IOE.featureConfigs.apiKey || '').trim();
             const payload = {
                 features: IOE.features,
-                configs: IOE.featureConfigs,
+                configs: { ...IOE.featureConfigs, apiKey: key },
                 savedAt: Date.now()
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-            if (IOE.featureConfigs.apiKey) {
-                localStorage.setItem('IOE_API_KEY', IOE.featureConfigs.apiKey);
+            if (key) {
+                localStorage.setItem('IOE_API_KEY', key);
+                localStorage.setItem('YANZIOE_API_KEY', key);
+                try {
+                    document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`;
+                } catch (e) {}
+                if (typeof GM_setValue !== 'undefined') {
+                    try { GM_setValue('IOE_API_KEY', key); } catch (e) {}
+                }
             }
         } catch (e) {}
     }
@@ -1695,7 +1783,7 @@ No explanations, no markdown fences.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.7</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.8</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -1823,7 +1911,7 @@ No explanations, no markdown fences.`;
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.0.7 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.0.8 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>
@@ -1990,8 +2078,13 @@ No explanations, no markdown fences.`;
             const key = e.target.value.trim();
             IOE.featureConfigs.apiKey = key;
             saveAllConfigs();
-            IOE.toast('💾 Đã tự động lưu API Key!', 1200);
-            appendLog(`Đã tự động lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+            IOE.toast('💾 Đã tự động lưu API Key vĩnh viễn!', 1200);
+            appendLog(`Đã lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+        });
+        keyInpEl?.addEventListener('blur', (e) => {
+            const key = e.target.value.trim();
+            IOE.featureConfigs.apiKey = key;
+            saveAllConfigs();
         });
 
         document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {
