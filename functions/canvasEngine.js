@@ -485,20 +485,25 @@
         const fullDisplayAnswers = [];
         const compactDisplayList = [];
         for (let i = 1; i <= totalBlanks; i++) {
-            const ans = recordedAnswers[i] || (fullAnswers[String(i)] ? fullAnswers[String(i)] : '');
-            if (ans) {
-                fullDisplayAnswers.push(`• Câu ${i}: ${ans}`);
-                compactDisplayList.push(`Câu ${i}: ${ans}`);
+            const rawAns = recordedAnswers[i] || (fullAnswers[String(i)] ? fullAnswers[String(i)] : '');
+            const ansStr = String(rawAns || '').trim();
+            const cleanWord = ansStr.replace(/^[a-d][.:)\s_-]+/i, '').trim();
+            const isValid = IOE.isValidClozeWord ? IOE.isValidClozeWord(cleanWord || ansStr) : (ansStr.length > 0 && !/^[_.\s-]+$/.test(ansStr));
+            if (isValid) {
+                fullDisplayAnswers.push(`• Câu ${i}: ${ansStr}`);
+                compactDisplayList.push(`Câu ${i}: ${ansStr}`);
             }
         }
 
-        IOE.events?.emit('questionSolved', {
-            qId: `cloze_${totalBlanks}_questions`,
-            qText: `[Đoạn văn điền từ - Tổng cộng ${totalBlanks} câu hỏi]\n${passageText.slice(0, 120)}...`,
-            answer: compactDisplayList.join('  |  '),
-            tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
-            thinking: `📊 Đã phân tích toàn bộ ${totalBlanks} vị trí khuyết trong bài.\n✓ Cơ chế chống xáo trộn A, B, C, D đã kích hoạt thành công.\n✓ Đã điền chuẩn xác ${filledCount}/${totalBlanks} câu vào Cocos2d Canvas:\n${fullDisplayAnswers.join('\n')}`
-        });
+        if (compactDisplayList.length > 0) {
+            IOE.events?.emit('questionSolved', {
+                qId: `cloze_${totalBlanks}_questions`,
+                qText: `[Đoạn văn điền từ - Tổng cộng ${totalBlanks} câu hỏi]\n${passageText.slice(0, 120)}...`,
+                answer: compactDisplayList.join('  |  '),
+                tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
+                thinking: `📊 Đã phân tích toàn bộ ${totalBlanks} vị trí khuyết trong bài.\n✓ Cơ chế chống xáo trộn A, B, C, D đã kích hoạt thành công.\n✓ Đã điền chuẩn xác ${filledCount}/${totalBlanks} câu vào Cocos2d Canvas:\n${fullDisplayAnswers.join('\n')}`
+            });
+        }
 
         return filledCount > 0;
     }

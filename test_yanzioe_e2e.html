@@ -234,10 +234,16 @@
                 const okHist = histAns && histAns["1"] === "cope with" && histAns["4"] === "wipe out" && histAns["8"] === "role";
                 log('17. Solves Nguyen Phuc Anh & Pigneau de Behaine cloze test with exact historical ground truth', okHist);
 
+                // Test 18: Rejects empty player strings/placeholders ("______", "") and falls back to ground truth
+                window.IOE.state.clozeAnswers = { "1": "", "2": "______", "3": "..." };
+                const filteredAns = await window.IOE.question.solveClozePassage(mockPassage, []);
+                const okFilter = filteredAns && filteredAns["1"] === "multicultural" && filteredAns["2"] === "from" && filteredAns["3"] === "set up";
+                log('18. Rejects empty strings & placeholders in clozeAnswers and extracts 100% verified ground truth', okFilter);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 17;
+                const allPassed = failCount === 0 && passCount >= 18;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/17 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount}/18 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';

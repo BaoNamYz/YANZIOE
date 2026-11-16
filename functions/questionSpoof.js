@@ -23,6 +23,19 @@
         return entry.wrong.has(String(ans).trim().toLowerCase());
     }
 
+    function isValidClozeWord(w) {
+        if (!w || typeof w !== 'string') return false;
+        const str = w.trim();
+        if (str.length < 1 || str.length > 35) return false;
+        // Loại bỏ chuỗi rỗng, dấu gạch nối, dấu chấm, placeholder
+        if (/^[_.\s-]+$/.test(str) || str.includes('______') || str.includes('...')) return false;
+        // Loại bỏ URL, tên miền rác
+        if (/https?:\/\/|\.com|\.net|\.org|\.vn|\.br|\.py|\.az|\.co|\.kh|\.il|\.hu|\.jp|translate\./i.test(str)) return false;
+        // Bắt buộc phải có ít nhất một chữ cái
+        if (!/[a-zA-Z]/.test(str)) return false;
+        return true;
+    }
+
     /* ================= 2. 0MS INSTANT THINKING GENERATOR ================= */
     function generate0msThinking(qText, ans, tier = '') {
         const lower = String(qText || '').toLowerCase();
@@ -306,34 +319,45 @@ No explanations, no markdown fences.`;
         const outAnswers = {};
 
         // 1. Kiểm tra đáp án bắt được từ Network / Bộ nhớ (Bypass Level 0)
-        if (IOE.state.clozeAnswers && Object.keys(IOE.state.clozeAnswers).length > 0) {
+        // BẮT BUỘC: Lọc chặt chẽ, chỉ sử dụng nếu là từ vựng thực sự, không nhận chuỗi rỗng "" hoặc placeholder
+        const validSystemAnswers = {};
+        if (IOE.state.clozeAnswers) {
+            for (const [k, v] of Object.entries(IOE.state.clozeAnswers)) {
+                if (isValidClozeWord(v)) {
+                    validSystemAnswers[k] = String(v).trim();
+                }
+            }
+        }
+
+        if (Object.keys(validSystemAnswers).length >= (rows.length || 6)) {
             console.log('[YANZIOE Bypass] Sử dụng đáp án gốc bắt được từ hệ thống!');
             if (rows.length === 0) {
-                Object.assign(outAnswers, IOE.state.clozeAnswers);
+                Object.assign(outAnswers, validSystemAnswers);
             } else {
                 for (const r of rows) {
                     const idxStr = String(r.index);
-                    if (IOE.state.clozeAnswers[idxStr]) {
-                        outAnswers[idxStr] = IOE.state.clozeAnswers[idxStr];
+                    if (validSystemAnswers[idxStr]) {
+                        outAnswers[idxStr] = validSystemAnswers[idxStr];
                     }
                 }
             }
             if (Object.keys(outAnswers).length >= (rows.length || 6)) {
-                const detailedAnswers = Object.entries(outAnswers)
-                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                    .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
-                const compactAnswers = Object.entries(outAnswers)
-                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                    .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-                const thinking = `🔓 [Bypass Hệ Thống]: Lấy toàn bộ ${Object.keys(outAnswers).length} đáp án gốc từ bộ nhớ IOE.\n✓ Đáp án chuẩn xác 100%:\n${detailedAnswers}`;
-                IOE.events?.emit('questionSolved', {
-                    qId: 'cloze_passage',
-                    qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
-                    answer: compactAnswers,
-                    tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
-                    thinking
-                });
-                return outAnswers;
+                const validEntries = Object.entries(outAnswers)
+                    .filter(([k, v]) => isValidClozeWord(v))
+                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
+                if (validEntries.length > 0) {
+                    const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+                    const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+                    const thinking = `🔓 [Bypass Hệ Thống]: Lấy toàn bộ ${validEntries.length} đáp án gốc từ bộ nhớ IOE.\n✓ Đáp án chuẩn xác 100%:\n${detailedAnswers}`;
+                    IOE.events?.emit('questionSolved', {
+                        qId: 'cloze_passage',
+                        qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                        answer: compactAnswers,
+                        tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
+                        thinking
+                    });
+                    return outAnswers;
+                }
             }
         }
 
@@ -357,21 +381,22 @@ No explanations, no markdown fences.`;
                     }
                 }
 
-                const detailedAnswers = Object.entries(outAnswers)
-                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                    .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
-                const compactAnswers = Object.entries(outAnswers)
-                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                    .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${Object.keys(outAnswers).length} đáp án xác thực 100%:\n${detailedAnswers}`;
-                IOE.events?.emit('questionSolved', {
-                    qId: 'cloze_passage',
-                    qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
-                    answer: compactAnswers,
-                    tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)',
-                    thinking
-                });
-                return outAnswers;
+                const validEntries = Object.entries(outAnswers)
+                    .filter(([k, v]) => isValidClozeWord(v))
+                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
+                if (validEntries.length > 0) {
+                    const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+                    const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+                    const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${validEntries.length} đáp án xác thực 100%:\n${detailedAnswers}`;
+                    IOE.events?.emit('questionSolved', {
+                        qId: 'cloze_passage',
+                        qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                        answer: compactAnswers,
+                        tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)',
+                        thinking
+                    });
+                    return outAnswers;
+                }
             }
         }
 
@@ -393,43 +418,45 @@ No explanations, no markdown fences.`;
         }
 
         if (Object.keys(outAnswers).length >= (rows.length || 6)) {
-            const detailedAnswers = Object.entries(outAnswers)
-                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
-            const compactAnswers = Object.entries(outAnswers)
-                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-            IOE.events?.emit('questionSolved', {
-                qId: 'cloze_passage_collocation',
-                qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
-                answer: compactAnswers,
-                tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
-                thinking: `✓ Khớp ${Object.keys(outAnswers).length} vị trí theo Collocation CAS:\n${detailedAnswers}`
-            });
-            return outAnswers;
+            const validEntries = Object.entries(outAnswers)
+                .filter(([k, v]) => isValidClozeWord(v))
+                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
+            if (validEntries.length > 0) {
+                const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+                const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+                IOE.events?.emit('questionSolved', {
+                    qId: 'cloze_passage_collocation',
+                    qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                    answer: compactAnswers,
+                    tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
+                    thinking: `✓ Khớp ${validEntries.length} vị trí theo Collocation CAS:\n${detailedAnswers}`
+                });
+                return outAnswers;
+            }
         }
 
         // 4. AI Solver (nếu có key AI cấu hình)
         const aiResult = await solveClozeWithAi(passageText, rows);
         if (aiResult && typeof aiResult === 'object') {
             for (const [k, v] of Object.entries(aiResult)) {
-                if (!outAnswers[k]) outAnswers[k] = v;
+                if (!outAnswers[k] && isValidClozeWord(v)) outAnswers[k] = v;
             }
-            const detailedAnswers = Object.entries(outAnswers)
-                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
-            const compactAnswers = Object.entries(outAnswers)
-                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
-                .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-            const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ cảnh đoạn văn.\n✓ Đáp án:\n${detailedAnswers}`;
-            IOE.events?.emit('questionSolved', {
-                qId: 'cloze_passage_ai',
-                qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
-                answer: compactAnswers,
-                tier: 'Tier 2 (AI Cloze)',
-                thinking
-            });
-            return outAnswers;
+            const validEntries = Object.entries(outAnswers)
+                .filter(([k, v]) => isValidClozeWord(v))
+                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
+            if (validEntries.length > 0) {
+                const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+                const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+                const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ cảnh đoạn văn.\n✓ Đáp án:\n${detailedAnswers}`;
+                IOE.events?.emit('questionSolved', {
+                    qId: 'cloze_passage_ai',
+                    qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                    answer: compactAnswers,
+                    tier: 'Tier 2 (AI Cloze)',
+                    thinking
+                });
+                return outAnswers;
+            }
         }
 
         // TUYỆT ĐỐI KHÔNG BỊA ĐÁP ÁN (Không dùng modulo ['A','B','C','D'][(i-1)%4])
@@ -535,16 +562,20 @@ No explanations, no markdown fences.`;
                     console.log('[YANZIOE Bypass] Trích xuất thành công game data từ ClientData.AppModel!');
                     // a. Trích xuất mảng đáp án Cloze Test (game.answear)
                     if (Array.isArray(game.answear) && game.answear.length > 0) {
+                        let validCount = 0;
                         game.answear.forEach((a, idx) => {
                             const pos = String(a.position || (idx + 1));
-                            const ans = a.tans || a.Tans || a.ans || a.content;
-                            if (ans) {
+                            const ans = a.tans || a.Tans || (a.ans && a.ans !== '______' ? a.ans : null) || (a.content && a.content !== '______' ? a.content : null);
+                            if (isValidClozeWord(ans) && parseInt(pos, 10) <= 15) {
                                 IOE.state.clozeAnswers[pos] = String(ans).trim();
                                 if (a.questId) IOE.state.correctAnswers.set(String(a.questId), String(ans).trim());
+                                validCount++;
                             }
                         });
-                        extracted = true;
-                        IOE.toast(`🔓 [Bypass] Bắt trọn ${game.answear.length} đáp án Cloze Test từ AppModel!`, 2000);
+                        if (validCount > 0) {
+                            extracted = true;
+                            IOE.toast(`🔓 [Bypass] Bắt trọn ${validCount} đáp án Cloze Test từ AppModel!`, 2000);
+                        }
                     }
 
                     // b. Trích xuất mảng câu hỏi (game.questionArr)
@@ -552,15 +583,15 @@ No explanations, no markdown fences.`;
                         game.questionArr.forEach((q, idx) => {
                             const qId = String(q.questionId || q.id || (idx + 1));
                             const tans = q.tans || q.Tans || q.data?.tans;
-                            if (tans) {
+                            if (isValidClozeWord(tans) && (idx + 1) <= 15) {
                                 IOE.state.correctAnswers.set(qId, String(tans).trim());
                                 IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
                                 if (q.questionContent?.content) {
                                     IOE.state.correctAnswers.set(String(q.questionContent.content).trim(), String(tans).trim());
                                 }
+                                extracted = true;
                             }
                         });
-                        extracted = true;
                     }
 
                     // c. Trích xuất raw game.question
@@ -568,12 +599,12 @@ No explanations, no markdown fences.`;
                         game.question.forEach((q, idx) => {
                             const qId = String(q.id || (idx + 1));
                             const tans = q.tans || q.Tans;
-                            if (tans) {
+                            if (isValidClozeWord(tans) && (idx + 1) <= 15) {
                                 IOE.state.correctAnswers.set(qId, String(tans).trim());
                                 IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
+                                extracted = true;
                             }
                         });
-                        extracted = true;
                     }
                 }
             }
@@ -609,15 +640,19 @@ No explanations, no markdown fences.`;
                                 if (d.game?.ans && Array.isArray(d.game.ans)) {
                                     d.game.ans.forEach((a, idx) => {
                                         const pos = String(a.position || (idx + 1));
-                                        const ans = a.tans || a.Tans || a.ans;
-                                        if (ans) IOE.state.clozeAnswers[pos] = String(ans).trim();
+                                        const ans = a.tans || a.Tans || (a.ans && a.ans !== '______' ? a.ans : null);
+                                        if (isValidClozeWord(ans) && parseInt(pos, 10) <= 15) {
+                                            IOE.state.clozeAnswers[pos] = String(ans).trim();
+                                            extracted = true;
+                                        }
                                     });
-                                    extracted = true;
                                 }
                                 if (Array.isArray(d.answearArr)) {
                                     const fullStr = d.answearArr.map(x => (typeof x === 'object' ? (x.content || '') : String(x))).join(' ').trim();
-                                    if (fullStr) IOE.state.correctAnswers.set('game11_full', fullStr);
-                                    extracted = true;
+                                    if (fullStr && isValidClozeWord(fullStr)) {
+                                        IOE.state.correctAnswers.set('game11_full', fullStr);
+                                        extracted = true;
+                                    }
                                 }
                             }
                         }
@@ -638,17 +673,6 @@ No explanations, no markdown fences.`;
         }
 
         return extracted;
-    }
-
-    function isValidClozeWord(w) {
-        if (!w || typeof w !== 'string') return false;
-        const str = w.trim();
-        if (str.length < 1 || str.length > 35) return false;
-        // Loại bỏ triệt để các URL, tên miền, địa chỉ web rác (Google translate, domains, etc.)
-        if (/https?:\/\/|\.com|\.net|\.org|\.vn|\.br|\.py|\.az|\.co|\.kh|\.il|\.hu|\.jp|translate\./i.test(str)) return false;
-        // Bắt buộc phải có chữ cái tiếng Anh
-        if (!/[a-zA-Z]/.test(str)) return false;
-        return true;
     }
 
     function scanCocosMemoryForAnswers() {
@@ -754,6 +778,7 @@ No explanations, no markdown fences.`;
     }
 
     IOE.CLOZE_KNOWLEDGE_BANK = CLOZE_KNOWLEDGE_BANK;
+    IOE.isValidClozeWord = isValidClozeWord;
 
     IOE.question = {
         solveQuestion,
