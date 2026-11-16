@@ -1,0 +1,245 @@
+(function (global) {
+    'use strict';
+    const IOE = global.IOE;
+    if (!IOE) return;
+
+    /* ================= 1. ADAPTIVE MISTAKE MEMORY ================= */
+    const adaptiveMistakes = new Map();
+
+    function recordAdaptiveMistake(qId, failedAns) {
+        if (!qId || !failedAns) return;
+        let entry = adaptiveMistakes.get(qId);
+        if (!entry) {
+            entry = { qId, wrong: new Set() };
+            adaptiveMistakes.set(qId, entry);
+        }
+        entry.wrong.add(String(failedAns).trim().toLowerCase());
+    }
+
+    function isAnswerWrong(qId, ans) {
+        const entry = adaptiveMistakes.get(qId);
+        if (!entry) return false;
+        return entry.wrong.has(String(ans).trim().toLowerCase());
+    }
+
+    /* ================= 2. 0MS INSTANT THINKING GENERATOR ================= */
+    function generate0msThinking(qText, ans, tier = '') {
+        const lower = String(qText || '').toLowerCase();
+        const ansStr = String(ans || '');
+
+        if (lower.includes('order') || lower.includes('reorder') || lower.includes('arrange') || lower.includes('sắp xếp')) {
+            return [
+                '🧠 [Tư duy 0ms - Cấu trúc câu tiếng Anh]:',
+                '• Xác định chủ ngữ (Subject) và động từ chính (Main Verb) trong các thẻ từ.',
+                '• Sắp xếp trật tự S + V + O + Adv theo chuẩn ngữ pháp tiếng Anh.',
+                '• Kiểm tra liên từ và dấu câu kết thúc.',
+                `➔ Kết quả sắp xếp: ${ansStr}`
+            ].join('\n');
+        }
+
+        if (lower.includes('fill') || lower.includes('blank') || lower.includes('điền')) {
+            return [
+                '🧠 [Tư duy 0ms - Ngữ pháp & Điền khuyết]:',
+                '• Phân tích thì của câu (Tense) và ngữ cảnh xung quanh vị trí trống.',
+                '• Xác định từ loại cần điền (danh từ, động từ, tính từ hoặc giới từ đi kèm).',
+                '• Đối chiếu biến đổi hình thái từ (V-ing, V-ed, số nhiều).',
+                `➔ Từ cần điền: ${ansStr}`
+            ].join('\n');
+        }
+
+        if (lower.includes('match') || lower.includes('nối') || lower.includes('cặp')) {
+            return [
+                '🧠 [Tư duy 0ms - Ghép cặp từ vựng & Nghĩa]:',
+                '• Quét danh sách các thẻ từ vựng và ảnh/định nghĩa tương ứng.',
+                '• Xác định cặp đồng nghĩa / trái nghĩa hoặc từ chỉ vật thể tương ứng.',
+                `➔ Cặp ghép: ${ansStr}`
+            ].join('\n');
+        }
+
+        return [
+            '🧠 [Tư duy 0ms - Phân tích ngữ cảnh & Loại trừ]:',
+            '• Đọc câu hỏi, xác định trọng tâm ngữ pháp hoặc nghĩa từ vựng.',
+            '• Loại trừ các phương án sai thì, sai cấu trúc hoặc không hợp ngữ cảnh.',
+            '• Khóa phương án chính xác nhất.',
+            `➔ Đáp án: ${ansStr}`
+        ].join('\n');
+    }
+
+    /* ================= 3. TIER 1: LOCAL ENGLISH CAS (0MS OFFLINE) ================= */
+    const IRREGULAR_VERBS = {
+        'go': 'went / gone', 'be': 'was, were / been', 'see': 'saw / seen',
+        'do': 'did / done', 'have': 'had / had', 'eat': 'ate / eaten',
+        'buy': 'bought / bought', 'take': 'took / taken', 'make': 'made / made',
+        'write': 'wrote / written', 'read': 'read / read', 'speak': 'spoke / spoken'
+    };
+
+    function solveLocalEnglish(qText) {
+        if (!qText) return null;
+        // Kiểm tra mẫu hỏi quá khứ phân từ hoặc biến đổi từ đơn giản
+        for (const [v, p] of Object.entries(IRREGULAR_VERBS)) {
+            if (new RegExp(`past\\s+(?:tense|participle)\\s+of\\s+['"]?${v}['"]?`, 'i').test(qText)) {
+                return { answer: p, tier: 'Tier 1 (Local CAS 0ms)' };
+            }
+        }
+        return null;
+    }
+
+    /* ================= 4. TIER 2: AI SOLVER (GROQ / GEMINI / OPENROUTER) ================= */
+    async function solveWithAi(qText, options = []) {
+        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
+        if (!apiKey) return null;
+
+        const isGemini = apiKey.startsWith('AIza');
+        const optsText = options.length ? `\nOptions:\n${options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n')}` : '';
+        const prompt = `Solve this Olympic English (IOE) question accurately.
+Return ONLY JSON format: {"answer": "..."} without any other text or markdown fences.
+If multiple choice, answer must be the exact text or option letter.
+If fill in blank, answer must be the exact word.
+If sentence reorder, answer must be the full reordered sentence.
+
+Question: ${qText}${optsText}`;
+
+        try {
+            if (isGemini) {
+                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                const j = await res.json();
+                const raw = j?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
+                if (m) {
+                    const parsed = JSON.parse(m[0]);
+                    return parsed.answer;
+                }
+                return raw.replace(/["'{}]/g, '').trim();
+            } else {
+                const isGroq = apiKey.startsWith('gsk_');
+                const endpoint = isGroq
+                    ? 'https://api.groq.com/openai/v1/chat/completions'
+                    : 'https://openrouter.ai/api/v1/chat/completions';
+                const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';
+
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model,
+                        messages: [{ role: 'user', content: prompt }],
+                        temperature: 0.1
+                    })
+                });
+                const j = await res.json();
+                const raw = j?.choices?.[0]?.message?.content || '';
+                const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
+                if (m) {
+                    const parsed = JSON.parse(m[0]);
+                    return parsed.answer;
+                }
+                return raw.replace(/["'{}]/g, '').trim();
+            }
+        } catch (err) {
+            return null;
+        }
+    }
+
+    /* ================= 5. SOLVE ORCHESTRATOR ================= */
+    async function solveQuestion(qId, qText, options = []) {
+        if (!qText && !qId) return null;
+
+        // Tier 0: Ground truth from raw packet
+        if (qId && IOE.state.correctAnswers.has(qId)) {
+            const ans = IOE.state.correctAnswers.get(qId);
+            const thinking = generate0msThinking(qText, ans, 'Tier 0 (Key Gốc)');
+            const meta = { qId, answer: ans, tier: 'Tier 0 (Key Gốc)', thinking };
+            IOE.state.solvedMeta.set(qId, meta);
+            IOE.events.emit('questionSolved', meta);
+            return meta;
+        }
+
+        // Tier 1: Local English CAS
+        const cas = solveLocalEnglish(qText);
+        if (cas && !isAnswerWrong(qId, cas.answer)) {
+            const thinking = generate0msThinking(qText, cas.answer, cas.tier);
+            const meta = { qId, answer: cas.answer, tier: cas.tier, thinking };
+            IOE.state.solvedMeta.set(qId, meta);
+            IOE.events.emit('questionSolved', meta);
+            return meta;
+        }
+
+        // Tier 2: AI Solver
+        IOE.toast('🔍 Đang giải câu hỏi...', 1200);
+        const aiAns = await solveWithAi(qText, options);
+        if (aiAns) {
+            const thinking = generate0msThinking(qText, aiAns, 'Tier 2 (AI)');
+            const meta = { qId, answer: aiAns, tier: 'Tier 2 (AI)', thinking };
+            IOE.state.solvedMeta.set(qId, meta);
+            IOE.events.emit('questionSolved', meta);
+            return meta;
+        }
+
+        return null;
+    }
+
+    /* ================= 6. NETWORK INTERCEPTOR ================= */
+    const originalFetch = window.fetch;
+    window.fetch = async function (...args) {
+        const res = await originalFetch.apply(this, args);
+        try {
+            const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+            if (url.includes('api') || url.includes('exam') || url.includes('test') || url.includes('question')) {
+                const clone = res.clone();
+                clone.json().then(data => parsePacket(data)).catch(() => {});
+            }
+        } catch (e) {}
+        return res;
+    };
+
+    const origOpen = XMLHttpRequest.prototype.open;
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (m, url, ...rest) {
+        this._ioeUrl = url;
+        return origOpen.apply(this, [m, url, ...rest]);
+    };
+    XMLHttpRequest.prototype.send = function (...args) {
+        this.addEventListener('load', function () {
+            try {
+                if (this._ioeUrl && (this._ioeUrl.includes('api') || this._ioeUrl.includes('exam'))) {
+                    const data = JSON.parse(this.responseText);
+                    parsePacket(data);
+                }
+            } catch (e) {}
+        });
+        return origSend.apply(this, args);
+    };
+
+    function parsePacket(data) {
+        if (!data) return;
+        const list = Array.isArray(data) ? data : (data.data || data.Questions || data.items || []);
+        if (Array.isArray(list) && list.length > 0) {
+            list.forEach(q => {
+                const id = q.Id || q.id || q.QuestionId;
+                if (id) {
+                    IOE.state.questions.set(String(id), q);
+                    const rawKey = q.Answer || q.Key || q.CorrectAnswer;
+                    if (rawKey) {
+                        IOE.state.correctAnswers.set(String(id), String(rawKey));
+                        IOE.toast(`🔓 Bắt được Key gốc: ${rawKey}`, 1800);
+                    }
+                }
+            });
+        }
+    }
+
+    IOE.question = {
+        solveQuestion,
+        generate0msThinking,
+        recordAdaptiveMistake,
+        isAnswerWrong
+    };
+})(typeof window !== 'undefined' ? window : globalThis);

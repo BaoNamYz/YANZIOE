@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "YANZIOE VIP - IOE.vn Tool",
+  "version": "1.0.0",
+  "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn",
+  "content_scripts": [
+    {
+      "matches": [
+        "*://ioe.vn/*",
+        "*://*.ioe.vn/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ]
+}
