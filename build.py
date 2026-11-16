@@ -1,11 +1,20 @@
-import os, json
+import os
+import json
+import shutil
+import zipfile
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = Path(__file__).resolve().parent
+DOWNLOADS_DIR = ROOT.parent
+VERSION_FILE = ROOT / 'VERSION.txt'
 
-with open(os.path.join(BASE_DIR, 'VERSION.txt'), 'r', encoding='utf-8') as f:
-    VERSION = f.read().strip()
+def get_version():
+    if VERSION_FILE.exists():
+        return VERSION_FILE.read_text(encoding='utf-8').strip()
+    return '1.0.1'
 
-print(f"Building YANZIOE v{VERSION}...")
+VERSION = get_version()
+print(f"=== Building YANZIOE VIP v{VERSION} (Khanware Standard) ===")
 
 MODULES = [
     'utils/utils.js',
@@ -19,24 +28,31 @@ MODULES = [
 
 bundled_parts = []
 for rel in MODULES:
-    p = os.path.join(BASE_DIR, rel)
-    with open(p, 'r', encoding='utf-8') as f:
-        bundled_parts.append(f"/* --- {rel} --- */\n" + f.read())
+    p = ROOT / rel
+    if p.exists():
+        code = p.read_text(encoding='utf-8')
+        bundled_parts.append(f"/* --- {rel} --- */\n" + code)
+    else:
+        print(f"[WARN] Missing module: {rel}")
 
 bundle_code = "\n\n".join(bundled_parts)
 
-# 1. Write YANZIOE.js
-dist_js = os.path.join(BASE_DIR, 'YANZIOE.js')
-with open(dist_js, 'w', encoding='utf-8') as f:
-    f.write(bundle_code)
-print(f"[OK] Generated {dist_js} ({len(bundle_code)} bytes)")
+# 1. Standard YANZIOE.js
+dist_js = ROOT / 'YANZIOE.js'
+dist_js.write_text(bundle_code, encoding='utf-8')
+print(f"[OK] Generated {dist_js.name} ({len(bundle_code)} bytes)")
 
-# 2. Write YANZIOE.user.js (Userscript Header)
-userscript_header = f"""// ==UserScript==
-// @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
+# 2. Userscript header builder
+def make_userscript_header(ver, is_coke=False):
+    title = "YANZIOE VIP (CoKey)" if is_coke else "YANZIOE VIP"
+    desc = "Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)"
+    if is_coke:
+        desc += " - Bản Free/CoKey không cần nhập API Key"
+    return f"""// ==UserScript==
+// @name         {title} - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      {VERSION}
-// @description  Tool hỗ trợ giải bài và hiển thị đáp án Olympic tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)
+// @version      {ver}
+// @description  {desc}
 // @author       YanzBn
 // @match        *://ioe.vn/*
 // @match        *://*.ioe.vn/*
@@ -51,40 +67,77 @@ userscript_header = f"""// ==UserScript==
 
 """
 
-dist_user_js = os.path.join(BASE_DIR, 'YANZIOE.user.js')
-with open(dist_user_js, 'w', encoding='utf-8') as f:
-    f.write(userscript_header + bundle_code)
-print(f"[OK] Generated {dist_user_js}")
+# 3. Standard YANZIOE.user.js
+dist_user_js = ROOT / 'YANZIOE.user.js'
+dist_user_js.write_text(make_userscript_header(VERSION, False) + bundle_code, encoding='utf-8')
+print(f"[OK] Generated {dist_user_js.name}")
 
-# 3. Write Chrome Extension files
-ext_dir = os.path.join(BASE_DIR, 'YANZIOE_Extension')
-os.makedirs(ext_dir, exist_ok=True)
+# 4. KoKey / Free Standalone files
+coke_header = "/* YANZIOE VIP v" + VERSION + " CoKey (Pre-activated Local CAS & Free Tier) */\n"
+dist_coke_min = ROOT / 'yanzioeKoKey.js'
+dist_coke_min.write_text(coke_header + bundle_code, encoding='utf-8')
 
-manifest = {
-    "manifest_version": 3,
-    "name": "YANZIOE VIP - IOE.vn Tool",
-    "version": VERSION,
-    "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn",
-    "content_scripts": [
-        {
-            "matches": [
-                "*://ioe.vn/*",
-                "*://*.ioe.vn/*",
-                "*://*.go.vn/*",
-                "*://*.vtc.vn/*"
-            ],
-            "js": ["content.js"],
-            "run_at": "document_start"
-        }
-    ],
-    "permissions": ["activeTab", "scripting"]
-}
+dist_coke_user = ROOT / 'YANZIOE_KoKey.user.js'
+dist_coke_user.write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
+print(f"[OK] Generated {dist_coke_min.name} and {dist_coke_user.name}")
 
-with open(os.path.join(ext_dir, 'manifest.json'), 'w', encoding='utf-8') as f:
-    json.dump(manifest, f, indent=2, ensure_ascii=False)
+# 5. Helper to write Chrome Extension MV3
+def write_extension_dir(target_dir, code, name_suffix=""):
+    target_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "manifest_version": 3,
+        "name": f"YANZIOE VIP {name_suffix} - IOE.vn Tool",
+        "version": VERSION,
+        "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn (DOM & Canvas CreateJS)",
+        "content_scripts": [
+            {
+                "matches": [
+                    "*://ioe.vn/*",
+                    "*://*.ioe.vn/*",
+                    "*://*.go.vn/*",
+                    "*://*.vtc.vn/*"
+                ],
+                "js": ["content.js"],
+                "run_at": "document_start"
+            }
+        ],
+        "permissions": ["activeTab", "scripting"]
+    }
+    (target_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
+    (target_dir / 'content.js').write_text(code, encoding='utf-8')
+    print(f"[OK] Extension written to {target_dir.name}")
 
-with open(os.path.join(ext_dir, 'content.js'), 'w', encoding='utf-8') as f:
-    f.write(bundle_code)
+# Standard Extension in Repo
+write_extension_dir(ROOT / 'YANZIOE_Extension', bundle_code, "")
+write_extension_dir(ROOT / 'YANZIOE_Extension_KoKey', bundle_code, "CoKey VIP")
 
-print(f"[OK] Extension generated at {ext_dir}")
-print(f"🎉 Build completed successfully for YANZIOE v{VERSION}!")
+# 6. Export CoKey release to Downloads folder (just like Khanware!)
+def pack_folder_zip(src_dir, zip_dest):
+    with zipfile.ZipFile(zip_dest, 'w', zipfile.ZIP_DEFLATED) as z:
+        for root_p, _, files in os.walk(src_dir):
+            for file in files:
+                full_path = Path(root_p) / file
+                rel = full_path.relative_to(src_dir)
+                z.write(full_path, rel)
+
+dist_release_dir = DOWNLOADS_DIR / f'YANZIOE_v{VERSION}_CoKey'
+dist_release_dir.mkdir(parents=True, exist_ok=True)
+
+# Copy deliverables into release folder
+(dist_release_dir / 'YANZIOE_CoKey.user.js').write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
+(dist_release_dir / 'yanzioeKoKey.js').write_text(coke_header + bundle_code, encoding='utf-8')
+write_extension_dir(dist_release_dir / 'YANZIOE_Extension_CoKey', bundle_code, "CoKey VIP")
+
+guide_src = ROOT / 'HUONG_DAN_CAI_DAT_KoKey.txt'
+if guide_src.exists():
+    shutil.copy2(guide_src, dist_release_dir / 'HUONG_DAN_CAI_DAT_CoKey.txt')
+
+hd_key = ROOT / 'hd_lay_keyapi.txt'
+if hd_key.exists():
+    shutil.copy2(hd_key, dist_release_dir / 'hd_lay_keyapi.txt')
+
+zip_dest = DOWNLOADS_DIR / f'YANZIOE_v{VERSION}_CoKey_VIP.zip'
+pack_folder_zip(dist_release_dir, zip_dest)
+print(f"[OK] Packaged ZIP release to {zip_dest}")
+
+print(f"🎉 Build completed successfully for YANZIOE VIP v{VERSION}!")

@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "YANZIOE VIP CoKey VIP - IOE.vn Tool",
+  "version": "1.0.1",
+  "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn (DOM & Canvas CreateJS)",
+  "content_scripts": [
+    {
+      "matches": [
+        "*://ioe.vn/*",
+        "*://*.ioe.vn/*",
+        "*://*.go.vn/*",
+        "*://*.vtc.vn/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ]
+}

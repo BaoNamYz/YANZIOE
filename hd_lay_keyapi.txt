@@ -1,0 +1,10 @@
+CACH LAY API KEY MIEN PHI DUNG CHO YANZIOE / YANZKHAN:
+
+1. Groq API (Toc do phan hoi sieu nhanh 0ms, mien phi 100%):
+https://console.groq.com/keys
+- Dang nhap bang Google.
+- Bam "Create API Key" -> Dat ten bat ky -> Copy key bat dau bang "gsk_...".
+
+2. OpenRouter API (Ho tro hon 100 model AI mien phi):
+https://openrouter.ai/keys
+- Dang nhap -> Bam "Create Key" -> Copy key bat dau bang "sk-or-v1-...".

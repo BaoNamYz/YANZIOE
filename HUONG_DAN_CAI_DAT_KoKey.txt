@@ -1,0 +1,27 @@
+=========================================================
+HUONG DAN CAI DAT YANZIOE VIP v1.0.1 (BAN CO KEY / KHONG CAN NHAP KEY)
+=========================================================
+
+CACH 1: Chrome / Edge / Coc Coc Extension (Khuyen dung - On dinh nhat)
+1. Giai nen file YANZIOE_v1.0.1_CoKey_VIP.zip ra mot thu muc co dinh tren may tinh.
+2. Mo trinh duyet -> go vao thanh dia chi: chrome://extensions/ (hoac edge://extensions/ hoac coccoc://extensions/).
+3. Bat cong tac "Developer mode" (Che do danh cho nha phat trien) o goc tren ben phai.
+4. Bam nut "Load unpacked" (Tai tien ich da giai nen) -> Chon thu muc YANZIOE_Extension_CoKey.
+5. Vao trang https://ioe.vn/ (hoac cac trang thi ioe.go.vn) -> Bam F5 la tool tu dong kich hoat ngay lap tuc!
+
+CACH 2: Tampermonkey / Violentmonkey (.user.js)
+1. Cai dat tien ich Tampermonkey tu Chrome Web Store.
+2. Mo Tampermonkey -> Chon "Them script moi" (Create a new script).
+3. Mo file YANZIOE_CoKey.user.js -> Nhan Ctrl + A, Ctrl + C toan bo noi dung.
+4. Dan vao trinh soan thao Tampermonkey -> Nhan File -> Save (Ctrl + S).
+5. Vao ioe.vn -> Menu glassmorphism YANZIOE se tu dong hien o goc phai man hinh!
+
+CACH 3: Bookmarklet 1 dong (Khong can cai gi, chay tren moi trinh duyet)
+Tien hanh tao 1 bookmark tren trinh duyet voi dia chi URL la:
+javascript:fetch('https://raw.githubusercontent.com/BaoNamYz/YANZIOE/main/YANZIOE.user.js').then(r=>r.text()).then(eval);
+
+PHIM TAT TIEN ICH:
+- Alt + H: An / Hien Menu YANZIOE
+- Alt + A: Bat / Tat che do Tu dong tra loi (AutoAnswer)
+- Nut "⚡ Giai ngay": Tu dong boc de va tra loi ngay ca tren Canvas HTML5 CreateJS
+=========================================================

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.0.0
-// @description  Tool hỗ trợ giải bài và hiển thị đáp án Olympic tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)
+// @version      1.0.1
+// @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
 // @match        *://*.ioe.vn/*
