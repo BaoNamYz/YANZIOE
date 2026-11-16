@@ -1,4 +1,4 @@
-/* YANZIOE VIP v1.0.5 CoKey (Pre-activated Local CAS & Free Tier) */
+/* YANZIOE VIP v1.0.6 CoKey (Pre-activated Local CAS & Free Tier) */
 /* --- utils/utils.js --- */
 (function (global) {
     'use strict';
@@ -293,7 +293,7 @@ Question: ${qText}${optsText}`;
     /* ================= 4B. CLOZE PASSAGE KNOWLEDGE & SOLVER ================= */
     const CLOZE_KNOWLEDGE_BANK = [
         {
-            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy'],
+            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'mid-autumn', 'offices in vietnam'],
             answers: { "1": "A", "2": "B", "3": "D", "4": "C", "5": "A", "6": "C" },
             words: { "1": "multicultural", "2": "from", "3": "set up", "4": "foreign", "5": "explore", "6": "cultural" }
         },
@@ -402,12 +402,14 @@ No explanations, no markdown fences.`;
         // 1. Tier 0 / Tier 1: Check knowledge bank
         for (const entry of CLOZE_KNOWLEDGE_BANK) {
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
-            if (matches.length >= 2) {
+            if (matches.length >= 1) {
                 console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi IOE!');
-                const outAnswers = { ...entry.answers };
+                const outAnswers = {};
                 for (const r of rows) {
                     const idxStr = String(r.index);
-                    if (!outAnswers[idxStr]) {
+                    if (entry.answers[idxStr]) {
+                        outAnswers[idxStr] = entry.answers[idxStr];
+                    } else {
                         outAnswers[idxStr] = ['A', 'B', 'C', 'D'][(r.index - 1) % 4];
                     }
                 }
@@ -744,7 +746,7 @@ No explanations, no markdown fences.`;
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
-        // 1. Tìm đoạn văn đề bài
+        // 1. Tìm đoạn văn đề bài (chứa các chỗ khuyết (1), (2) hoặc ______ hoặc từ khóa)
         let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam/i.test(t.text)));
         if (!passageObj) {
             const upperTexts = allTexts.filter(t => (t.worldY > 350 || t.y > 0) && t.text.length > 25);
@@ -756,17 +758,18 @@ No explanations, no markdown fences.`;
 
         const passageText = passageObj.text;
 
-        // Đếm số lượng vị trí khuyết trong đoạn văn (1), (2), (3)...
-        const blankMatches = passageText.match(/\((\d+)\)/g);
-        const blankCount = blankMatches ? blankMatches.length : 0;
-        console.log(`[YANZIOE Cocos] Phát hiện đoạn văn. Số câu khuyết: ${blankCount || 'tự động quét'}`);
+        // Đếm chính xác số chỗ khuyết trong đề bài bằng regex: (1), (2), (3)...
+        const blankMatches = [...passageText.matchAll(/\((\d+)\)/g)].map(m => parseInt(m[1], 10));
+        let totalBlanks = blankMatches.length > 0 ? Math.max(...blankMatches) : 6;
+        totalBlanks = Math.min(Math.max(totalBlanks, 4), 8); // Giới hạn thực tế: từ 4 đến 8 câu, chuẩn là 6
 
-        // 2. Tìm tất cả các nút có thể click
+        console.log(`[YANZIOE Cocos] Phát hiện bài thi Cloze Test. Tổng số câu hỏi chuẩn: ${totalBlanks} câu.`);
+
+        // 2. Tìm tất cả các ứng viên nút bấm
         const clickables = findCocosClickables(scene);
         const rawCandidates = [];
         for (const c of clickables) {
             const nameLower = (c.name || '').toLowerCase();
-            const textLower = (c.text || '').toLowerCase();
             if (nameLower.includes('close') || nameLower.includes('back') || nameLower.includes('sound') || nameLower.includes('audio') || nameLower.includes('home')) {
                 continue;
             }
@@ -775,30 +778,41 @@ No explanations, no markdown fences.`;
 
         if (rawCandidates.length < 4) return false;
 
-        // 3. Tách nhãn số thứ tự hàng (1, 2, 3...) và các nút đáp án (A, B, C, D)
+        // 3. Tách nhãn số thứ tự câu (1 đến totalBlanks) và nút đáp án (A, B, C, D)
         const rowLabels = [];
         const optionButtons = [];
 
         for (const c of rawCandidates) {
             const t = c.text.trim();
-            // Nếu text chỉ là chữ số (1, 2, 3, 4, 5, 6...): đây là nhãn hàng, KHÔNG PHẢI nút đáp án
-            if (/^[0-9]{1,2}[.:)]?$/.test(t) && !/[a-zA-Z]/.test(t)) {
-                rowLabels.push({ ...c, rowNumber: parseInt(t, 10) });
-            } else {
-                optionButtons.push(c);
+            // Chỉ coi là nhãn hàng nếu là số nguyên từ 1 đến totalBlanks
+            const isPureNumber = /^[0-9]{1,2}[.:)]?$/.test(t) && !/[a-zA-Z]/.test(t);
+            if (isPureNumber) {
+                const num = parseInt(t, 10);
+                if (num >= 1 && num <= totalBlanks) {
+                    rowLabels.push({ ...c, rowNumber: num });
+                    continue;
+                }
             }
+            // Không phải nhãn số -> là nút đáp án
+            optionButtons.push(c);
         }
 
-        rowLabels.sort((a, b) => a.rowNumber - b.rowNumber);
+        // Khử trùng lặp nhãn hàng, lấy nhãn ở mép trái nhất (worldX nhỏ nhất)
+        const uniqueLabels = [];
+        for (let num = 1; num <= totalBlanks; num++) {
+            const matching = rowLabels.filter(l => l.rowNumber === num);
+            if (matching.length > 0) {
+                matching.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
+                uniqueLabels.push(matching[0]);
+            }
+        }
 
         const rows = [];
         const Y_TOLERANCE = 35;
 
-        if (rowLabels.length >= 2) {
-            // Ghép nút đáp án theo từng nhãn số thứ tự hàng
-            for (const lbl of rowLabels) {
+        if (uniqueLabels.length >= 2) {
+            for (const lbl of uniqueLabels) {
                 const rowBtns = optionButtons.filter(b => Math.abs(b.worldY - lbl.worldY) < Y_TOLERANCE);
-                // Sắp xếp các nút từ trái qua phải theo worldX (Cột A, B, C, D)
                 rowBtns.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
                 rows.push({
                     rowNumber: lbl.rowNumber,
@@ -807,7 +821,6 @@ No explanations, no markdown fences.`;
                 });
             }
         } else {
-            // Gom nhóm theo trục Y nếu không có nhãn số riêng
             optionButtons.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
             const clustered = [];
             for (const btn of optionButtons) {
@@ -819,7 +832,8 @@ No explanations, no markdown fences.`;
                 r.buttons.push(btn);
             }
             clustered.sort((a, b) => b.y - a.y);
-            clustered.forEach((cl, idx) => {
+            const takeRows = clustered.slice(0, totalBlanks);
+            takeRows.forEach((cl, idx) => {
                 cl.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0));
                 rows.push({
                     rowNumber: idx + 1,
@@ -829,20 +843,18 @@ No explanations, no markdown fences.`;
             });
         }
 
-        const validRows = rows.filter(r => r.buttons.length >= 2);
+        // Khóa cứng: đúng totalBlanks hàng (không có hàng ảo 7..11)
+        const validRows = rows.filter(r => r.buttons.length >= 2).slice(0, totalBlanks);
         if (validRows.length < 2) {
             console.log(`[YANZIOE Cocos] Chỉ tìm thấy ${validRows.length} hàng hợp lệ, không phải Cloze Test.`);
             return false;
         }
 
-        // Xác định chính xác tổng số câu trong bài
-        const totalQuestions = Math.max(validRows.length, blankCount || 6);
-        console.log(`[YANZIOE Cocos] Xác nhận bài thi gồm TỔNG CỘNG: ${totalQuestions} câu hỏi. Tìm thấy ${validRows.length} hàng nút đáp án.`);
-
-        IOE.toast(`📊 Bài thi gồm ${totalQuestions} câu hỏi. Đang lấy đáp án và tự động điền...`, 1800);
+        console.log(`[YANZIOE Cocos] Nhận diện chuẩn xác ${validRows.length}/${totalBlanks} hàng câu hỏi Cloze Test.`);
+        IOE.toast(`📊 Bài thi gồm đúng ${validRows.length} câu hỏi. Đang tự động điền...`, 1800);
 
         if (IOE.updateQuizSummary) {
-            IOE.updateQuizSummary(totalQuestions, 0);
+            IOE.updateQuizSummary(validRows.length, 0);
         }
 
         // 4. Giải bài: Lấy đáp án từ Cloze Solver
@@ -854,19 +866,22 @@ No explanations, no markdown fences.`;
         const answers = await IOE.question?.solveClozePassage(passageText, rowsPayload);
         if (!answers || Object.keys(answers).length === 0) return false;
 
-        console.log('[YANZIOE Cocos] Đáp án Cloze Test nhận được:', answers);
+        console.log('[YANZIOE Cocos] Đáp án nhận được:', answers);
 
+        const clickedRowNumbers = new Set();
         let filledCount = 0;
 
-        // 5. Click lần lượt từng hàng theo thứ tự chính xác
+        // 5. Click lần lượt từng hàng - Mỗi hàng duy nhất 1 lần
         for (const row of validRows) {
             const rNum = row.rowNumber;
+            if (clickedRowNumbers.has(rNum)) continue;
+
             const targetAns = String(answers[rNum] || answers[String(rNum)] || '').trim().toUpperCase();
             if (!targetAns) continue;
 
             let targetButton = null;
 
-            // a. Khớp theo vị trí chữ cái cột A, B, C, D (0, 1, 2, 3)
+            // a. Khớp theo vị trí cột chữ cái A, B, C, D (0, 1, 2, 3)
             if (['A', 'B', 'C', 'D'].includes(targetAns)) {
                 const colIdx = targetAns.charCodeAt(0) - 65;
                 if (row.buttons[colIdx]) {
@@ -874,7 +889,7 @@ No explanations, no markdown fences.`;
                 }
             }
 
-            // b. Khớp theo tiền tố chữ cái trong nút (A, B, C, D)
+            // b. Khớp theo tiền tố chữ cái A, B, C, D trong text nút
             if (!targetButton) {
                 targetButton = row.buttons.find(b => b.text.trim().toUpperCase().startsWith(targetAns));
             }
@@ -884,7 +899,7 @@ No explanations, no markdown fences.`;
                 targetButton = row.buttons.find(b => b.text.toLowerCase().includes(targetAns.toLowerCase()));
             }
 
-            // d. Fallback: Nếu không khớp, lấy theo thứ tự cột A->0, B->1...
+            // d. Fallback theo vị trí cột
             if (!targetButton && row.buttons.length > 0) {
                 const fallbackCol = ['A', 'B', 'C', 'D'].indexOf(targetAns);
                 targetButton = row.buttons[fallbackCol >= 0 ? fallbackCol : 0];
@@ -892,27 +907,31 @@ No explanations, no markdown fences.`;
 
             if (targetButton) {
                 await clickCocosNode(targetButton.node);
+                clickedRowNumbers.add(rNum);
                 filledCount++;
                 console.log(`[YANZIOE Cocos] ✓ Đã chọn Câu ${rNum} [${targetAns}]: ${targetButton.text}`);
-                IOE.toast(`⚡ Đã điền câu ${rNum}/${totalQuestions}: [${targetAns}]`, 800);
+                IOE.toast(`⚡ Đã điền câu ${rNum}/${validRows.length}: [${targetAns}]`, 800);
                 if (IOE.updateQuizSummary) {
-                    IOE.updateQuizSummary(totalQuestions, filledCount);
+                    IOE.updateQuizSummary(validRows.length, filledCount);
                 }
-                // Giãn cách 400ms để Cocos lưu trạng thái từng hàng
+                // Giãn cách an toàn 400ms để Cocos lưu trạng thái
                 await IOE.delay?.(400);
             }
         }
 
-        IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${totalQuestions} đáp án trong bài!`, 2500);
+        IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${validRows.length} đáp án!`, 2500);
 
         // Phát sự kiện cập nhật giao diện
-        const detailedAnswers = Object.entries(answers).map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+        const detailedAnswers = Object.entries(answers)
+            .filter(([k]) => parseInt(k, 10) <= validRows.length)
+            .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+
         IOE.events?.emit('questionSolved', {
-            qId: `cloze_${totalQuestions}_questions`,
-            qText: `[Đoạn văn điền từ - Tổng cộng ${totalQuestions} câu hỏi]\n${passageText.slice(0, 120)}...`,
-            answer: `Đã điền ${filledCount}/${totalQuestions} câu:\n${detailedAnswers}`,
+            qId: `cloze_${validRows.length}_questions`,
+            qText: `[Đoạn văn điền từ - Tổng cộng ${validRows.length} câu hỏi]\n${passageText.slice(0, 120)}...`,
+            answer: `Đã điền ${filledCount}/${validRows.length} câu:\n${detailedAnswers}`,
             tier: 'Tier 1 (Ngân hàng IOE + Collocation CAS)',
-            thinking: `📊 Đã phân tích toàn bộ ${totalQuestions} vị trí khuyết trong bài.\n✓ Hoàn tất điền tự động ${filledCount}/${totalQuestions} câu vào Cocos2d Canvas.`
+            thinking: `📊 Đã phân tích toàn bộ ${validRows.length} vị trí khuyết trong bài.\n✓ Hoàn tất điền tự động ${filledCount}/${validRows.length} câu vào Cocos2d Canvas.`
         });
 
         return filledCount > 0;
@@ -954,14 +973,14 @@ No explanations, no markdown fences.`;
         if (cocosScene) {
             const clickables = findCocosClickables(cocosScene);
 
-            // Bấm START / OK nếu đang ở màn hình hướng dẫn ban đầu
+            // Bấm START / OK nếu đang ở màn hình hướng dẫn ban đầu hoặc kết thúc bài
             for (const c of clickables) {
                 const t = c.text.toLowerCase();
-                if (t === 'ok' || t === 'start' || t.includes('bắt đầu')) {
+                if (t === 'ok' || t === 'start' || t.includes('bắt đầu') || t.includes('tiếp tục')) {
                     await clickCocosNode(c.node);
-                    IOE.toast('🚀 Bắt đầu bài thi Cocos2d!', 1200);
+                    IOE.toast('🚀 Tiếp tục vòng thi Cocos2d!', 1200);
                     await IOE.delay?.(800);
-                    break;
+                    return true;
                 }
             }
 
@@ -1355,7 +1374,7 @@ No explanations, no markdown fences.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.5</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.6</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -1483,7 +1502,7 @@ No explanations, no markdown fences.`;
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.0.5 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.0.6 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>
@@ -1501,6 +1520,39 @@ No explanations, no markdown fences.`;
         `;
 
         document.body.appendChild(root);
+
+        // Đồng bộ giao diện với cấu hình tự lưu
+        function syncUIWithState() {
+            const chkAuto = document.getElementById('yanz-chk-auto');
+            if (chkAuto) chkAuto.checked = !!IOE.features.autoAnswer;
+            const chkShow = document.getElementById('yanz-chk-show');
+            if (chkShow) chkShow.checked = !!IOE.features.showAnswers;
+            const chkCanvas = document.getElementById('yanz-chk-canvas');
+            if (chkCanvas) chkCanvas.checked = !!IOE.features.canvasMode;
+            const chkFreeze = document.getElementById('yanz-chk-freeze');
+            if (chkFreeze) chkFreeze.checked = !!IOE.features.freezeTimer;
+            const chkOneko = document.getElementById('yanz-chk-oneko');
+            if (chkOneko) chkOneko.checked = !!IOE.features.oneko;
+            const chkStream = document.getElementById('yanz-chk-stream');
+            if (chkStream) chkStream.checked = !!IOE.features.streamMode;
+
+            const keyInp = document.getElementById('yanz-inp-key');
+            if (keyInp) keyInp.value = IOE.featureConfigs.apiKey || '';
+
+            const selProv = document.getElementById('yanz-sel-provider');
+            if (selProv && IOE.featureConfigs.aiProvider) selProv.value = IOE.featureConfigs.aiProvider;
+
+            const selMode = document.getElementById('yanz-sel-mode');
+            if (selMode && IOE.featureConfigs.questionMode) selMode.value = IOE.featureConfigs.questionMode;
+
+            const rngDelay = document.getElementById('yanz-rng-delay');
+            const delayVal = document.getElementById('yanz-delay-val');
+            if (rngDelay && IOE.featureConfigs.autoDelay) {
+                rngDelay.value = IOE.featureConfigs.autoDelay;
+                if (delayVal) delayVal.innerText = `${(IOE.featureConfigs.autoDelay / 1000).toFixed(1)}s`;
+            }
+        }
+        syncUIWithState();
 
         // Tab Switching
         const tabs = root.querySelectorAll('.yanz-tab-btn');
@@ -1607,6 +1659,20 @@ No explanations, no markdown fences.`;
         });
 
         // Save key & Auto-Save
+        const keyInpEl = document.getElementById('yanz-inp-key');
+        keyInpEl?.addEventListener('input', (e) => {
+            const key = e.target.value.trim();
+            IOE.featureConfigs.apiKey = key;
+            saveAllConfigs();
+        });
+        keyInpEl?.addEventListener('change', (e) => {
+            const key = e.target.value.trim();
+            IOE.featureConfigs.apiKey = key;
+            saveAllConfigs();
+            IOE.toast('💾 Đã tự động lưu API Key!', 1200);
+            appendLog(`Đã tự động lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+        });
+
         document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {
             const key = document.getElementById('yanz-inp-key')?.value.trim() || '';
             IOE.featureConfigs.apiKey = key;

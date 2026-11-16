@@ -96,7 +96,7 @@
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.5</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.6</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -224,7 +224,7 @@
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.0.5 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.0.6 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>
@@ -242,6 +242,39 @@
         `;
 
         document.body.appendChild(root);
+
+        // Đồng bộ giao diện với cấu hình tự lưu
+        function syncUIWithState() {
+            const chkAuto = document.getElementById('yanz-chk-auto');
+            if (chkAuto) chkAuto.checked = !!IOE.features.autoAnswer;
+            const chkShow = document.getElementById('yanz-chk-show');
+            if (chkShow) chkShow.checked = !!IOE.features.showAnswers;
+            const chkCanvas = document.getElementById('yanz-chk-canvas');
+            if (chkCanvas) chkCanvas.checked = !!IOE.features.canvasMode;
+            const chkFreeze = document.getElementById('yanz-chk-freeze');
+            if (chkFreeze) chkFreeze.checked = !!IOE.features.freezeTimer;
+            const chkOneko = document.getElementById('yanz-chk-oneko');
+            if (chkOneko) chkOneko.checked = !!IOE.features.oneko;
+            const chkStream = document.getElementById('yanz-chk-stream');
+            if (chkStream) chkStream.checked = !!IOE.features.streamMode;
+
+            const keyInp = document.getElementById('yanz-inp-key');
+            if (keyInp) keyInp.value = IOE.featureConfigs.apiKey || '';
+
+            const selProv = document.getElementById('yanz-sel-provider');
+            if (selProv && IOE.featureConfigs.aiProvider) selProv.value = IOE.featureConfigs.aiProvider;
+
+            const selMode = document.getElementById('yanz-sel-mode');
+            if (selMode && IOE.featureConfigs.questionMode) selMode.value = IOE.featureConfigs.questionMode;
+
+            const rngDelay = document.getElementById('yanz-rng-delay');
+            const delayVal = document.getElementById('yanz-delay-val');
+            if (rngDelay && IOE.featureConfigs.autoDelay) {
+                rngDelay.value = IOE.featureConfigs.autoDelay;
+                if (delayVal) delayVal.innerText = `${(IOE.featureConfigs.autoDelay / 1000).toFixed(1)}s`;
+            }
+        }
+        syncUIWithState();
 
         // Tab Switching
         const tabs = root.querySelectorAll('.yanz-tab-btn');
@@ -348,6 +381,20 @@
         });
 
         // Save key & Auto-Save
+        const keyInpEl = document.getElementById('yanz-inp-key');
+        keyInpEl?.addEventListener('input', (e) => {
+            const key = e.target.value.trim();
+            IOE.featureConfigs.apiKey = key;
+            saveAllConfigs();
+        });
+        keyInpEl?.addEventListener('change', (e) => {
+            const key = e.target.value.trim();
+            IOE.featureConfigs.apiKey = key;
+            saveAllConfigs();
+            IOE.toast('💾 Đã tự động lưu API Key!', 1200);
+            appendLog(`Đã tự động lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+        });
+
         document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {
             const key = document.getElementById('yanz-inp-key')?.value.trim() || '';
             IOE.featureConfigs.apiKey = key;

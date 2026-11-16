@@ -137,22 +137,42 @@
                 window.IOE.auto.clickNextButton();
                 log('10. Auto next button detector finds "Tiếp tục" and dispatches click', nextClicked);
 
-                // Test 11: Cloze Passage Solver (Lâu đài trên mây)
-                const mockPassage = "Vietnam is becoming a more (1) ______ country as people from different nations come to live. Cuisines (2) ____ Japan, Korea. International companies (3) ______ offices in Vietnam. Celebrated by (4) ______ residents.";
+                // Test 11: Cloze Passage Solver - Exact 6 Blanks & No Phantom Rows
+                const mockPassage = "Vietnam is becoming a more (1) ______ country as people from different nations come to live. Cuisines (2) ____ Japan, Korea. International companies (3) ______ offices in Vietnam. Celebrated by (4) ______ residents. Open to (5) ______ and cultural (6) ______";
                 const mockRows = [
                     { index: 1, options: ["A multicultural", "B boring", "C isolated", "D traditional"] },
                     { index: 2, options: ["A with", "B from", "C for", "D to"] },
                     { index: 3, options: ["A take down", "B bring up", "C take up", "D set up"] },
-                    { index: 4, options: ["A private", "B ancient", "C foreign", "D rural"] }
+                    { index: 4, options: ["A private", "B ancient", "C foreign", "D rural"] },
+                    { index: 5, options: ["A explore", "B forget", "C damage", "D block"] },
+                    { index: 6, options: ["A boring", "B empty", "C cultural", "D quiet"] }
                 ];
                 const clozeAns = await window.IOE.question.solveClozePassage(mockPassage, mockRows);
-                const ok11 = clozeAns && clozeAns["1"] === "A" && clozeAns["2"] === "B" && clozeAns["3"] === "D" && clozeAns["4"] === "C";
-                log('11. Cloze Passage Solver accurately solves 4-6 blanks with exact letters ("1": A, "2": B, "3": D, "4": C)', ok11);
+                const ok11a = clozeAns && clozeAns["1"] === "A" && clozeAns["2"] === "B" && clozeAns["3"] === "D" && clozeAns["4"] === "C" && clozeAns["5"] === "A" && clozeAns["6"] === "C";
+                const ok11b = Object.keys(clozeAns).length === 6 && !clozeAns["7"] && !clozeAns["11"];
+                log('11. Cloze Passage accurately solves all 6 blanks (1:A, 2:B, 3:D, 4:C, 5:A, 6:C) with NO phantom rows (7..11)', ok11a && ok11b);
+
+                // Test 12: Instant API Key Auto-Save
+                const keyInpTest = document.getElementById('yanz-inp-key');
+                keyInpTest.value = 'gsk_test_mock_12345';
+                keyInpTest.dispatchEvent(new Event('input', { bubbles: true }));
+                const savedKey = localStorage.getItem('IOE_API_KEY');
+                const ok12 = savedKey === 'gsk_test_mock_12345' && window.IOE.featureConfigs.apiKey === 'gsk_test_mock_12345';
+                log('12. API Key auto-saves instantly on typing/pasting without needing to click any button', ok12);
+
+                // Test 13: Instant Settings Auto-Save & Storage Persistence
+                const chkAutoTest = document.getElementById('yanz-chk-auto');
+                chkAutoTest.checked = true;
+                chkAutoTest.dispatchEvent(new Event('change', { bubbles: true }));
+                const rawConfig = localStorage.getItem('YANZIOE_CONFIG_VIP_V1');
+                const parsedCfg = rawConfig ? JSON.parse(rawConfig) : null;
+                const ok13 = parsedCfg && parsedCfg.features && parsedCfg.features.autoAnswer === true;
+                log('13. Features & Toggles auto-save instantly to localStorage (YANZIOE_CONFIG_VIP_V1)', ok13);
 
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 11;
+                const allPassed = failCount === 0 && passCount >= 13;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/11 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount}/13 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';

@@ -151,7 +151,7 @@ Question: ${qText}${optsText}`;
     /* ================= 4B. CLOZE PASSAGE KNOWLEDGE & SOLVER ================= */
     const CLOZE_KNOWLEDGE_BANK = [
         {
-            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy'],
+            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'mid-autumn', 'offices in vietnam'],
             answers: { "1": "A", "2": "B", "3": "D", "4": "C", "5": "A", "6": "C" },
             words: { "1": "multicultural", "2": "from", "3": "set up", "4": "foreign", "5": "explore", "6": "cultural" }
         },
@@ -260,12 +260,14 @@ No explanations, no markdown fences.`;
         // 1. Tier 0 / Tier 1: Check knowledge bank
         for (const entry of CLOZE_KNOWLEDGE_BANK) {
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
-            if (matches.length >= 2) {
+            if (matches.length >= 1) {
                 console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi IOE!');
-                const outAnswers = { ...entry.answers };
+                const outAnswers = {};
                 for (const r of rows) {
                     const idxStr = String(r.index);
-                    if (!outAnswers[idxStr]) {
+                    if (entry.answers[idxStr]) {
+                        outAnswers[idxStr] = entry.answers[idxStr];
+                    } else {
                         outAnswers[idxStr] = ['A', 'B', 'C', 'D'][(r.index - 1) % 4];
                     }
                 }
