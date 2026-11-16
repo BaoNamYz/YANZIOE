@@ -4,15 +4,124 @@
     const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
-    /* ================= CREATEJS / ADOBE ANIMATE CANVAS ENGINE ================= */
+    /* ================= 1. COCOS2D-JS / COCOS CREATOR ENGINE ================= */
+    // IOE games like "Lâu đài trên mây", "Thủ môn bắt bóng", v.v. sử dụng Cocos2d-JS
+    function getCocosScene() {
+        try {
+            const cc = win.cc;
+            if (cc && cc.director && typeof cc.director.getScene === 'function') {
+                return cc.director.getScene();
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // Đệ quy quét toàn bộ text trong cây đối tượng Cocos2d
+    function extractCocosTexts(node, maxDepth = 10, curDepth = 0) {
+        if (!node || curDepth > maxDepth) return [];
+        const results = [];
+        try {
+            // 1. Kiểm tra Label Component
+            let labelComp = null;
+            if (typeof node.getComponent === 'function') {
+                const cc = win.cc;
+                if (cc && cc.Label) labelComp = node.getComponent(cc.Label);
+                if (!labelComp && cc && cc.RichText) labelComp = node.getComponent(cc.RichText);
+                if (!labelComp && cc && cc.EditBox) labelComp = node.getComponent(cc.EditBox);
+            }
+
+            const strVal = labelComp?.string || node._string || node.string;
+            if (strVal && typeof strVal === 'string') {
+                const clean = strVal.trim();
+                if (clean.length > 0) {
+                    results.push({ node, text: clean, comp: labelComp });
+                }
+            }
+
+            // 2. Quét các node con
+            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+            for (const child of children) {
+                results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));
+            }
+        } catch (e) {}
+        return results;
+    }
+
+    // Tìm các nút bấm có thể click được trong Cocos2d
+    function findCocosClickables(node, maxDepth = 10, curDepth = 0) {
+        if (!node || curDepth > maxDepth) return [];
+        const results = [];
+        try {
+            const cc = win.cc;
+            let hasBtn = false;
+            if (typeof node.getComponent === 'function' && cc?.Button) {
+                hasBtn = !!node.getComponent(cc.Button);
+            }
+            if (hasBtn || node._hasClickEventListener || node._touchListener) {
+                const txt = extractCocosTexts(node).map(t => t.text).join(' ');
+                results.push({ node, text: txt });
+            }
+
+            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+            for (const child of children) {
+                results.push(...findCocosClickables(child, maxDepth, curDepth + 1));
+            }
+        } catch (e) {}
+        return results;
+    }
+
+    // Kích hoạt click vào một Node trong Cocos2d
+    function clickCocosNode(node) {
+        if (!node) return false;
+        try {
+            const cc = win.cc;
+            // Cách 1: Kích hoạt Button component
+            if (typeof node.getComponent === 'function' && cc?.Button) {
+                const btn = node.getComponent(cc.Button);
+                if (btn) {
+                    if (Array.isArray(btn.clickEvents)) {
+                        for (const ev of btn.clickEvents) {
+                            if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);
+                        }
+                    }
+                    if (typeof btn._onTouchEnded === 'function') {
+                        btn._onTouchEnded({});
+                        return true;
+                    }
+                }
+            }
+
+            // Cách 2: Bắn Event TOUCH_END trên Node
+            if (typeof node.emit === 'function') {
+                node.emit('touchend');
+                node.emit('click');
+                return true;
+            }
+
+            // Cách 3: Dispatch native touch / mouse qua canvas
+            const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas');
+            if (canvas && typeof node.convertToWorldSpaceAR === 'function') {
+                const worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
+                const rect = canvas.getBoundingClientRect();
+                const clientX = rect.left + worldPos.x;
+                const clientY = rect.bottom - worldPos.y; // Cocos trục Y từ dưới lên
+                dispatchCanvasClick(canvas, clientX, clientY);
+                return true;
+            }
+        } catch (err) {
+            console.warn('[YANZIOE Cocos] clickCocosNode error:', err);
+        }
+        return false;
+    }
+
+    /* ================= 2. CREATEJS / EASELJS CANVAS ENGINE ================= */
     function getStageAndRoot() {
         const stage = win.stage || win.exportRoot?.stage || null;
         const root = win.exportRoot || null;
         return { stage, root };
     }
 
-    // Đệ quy quét toàn bộ text hiển thị trong Canvas
-    function extractCanvasTexts(container, maxDepth = 6, curDepth = 0) {
+    function extractCreateJSTexts(container, maxDepth = 6, curDepth = 0) {
         if (!container || curDepth > maxDepth) return [];
         const texts = [];
         const children = container.children || [];
@@ -22,129 +131,124 @@
                 if (t && t.length > 1) texts.push({ obj: child, text: t });
             }
             if (child.children && child.children.length > 0) {
-                texts.push(...extractCanvasTexts(child, maxDepth, curDepth + 1));
+                texts.push(...extractCreateJSTexts(child, maxDepth, curDepth + 1));
             }
         }
         return texts;
     }
 
-    // Đệ quy tìm các nút bấm (MovieClip có event click hoặc mouseEnabled)
-    function findCanvasClickables(container, maxDepth = 6, curDepth = 0) {
+    function findCreateJSClickables(container, maxDepth = 6, curDepth = 0) {
         if (!container || curDepth > maxDepth) return [];
-        const buttons = [];
+        const clickables = [];
         const children = container.children || [];
         for (const child of children) {
-            const hasListeners = child._listeners && (child._listeners.click || child._listeners.mousedown);
-            const isClickable = child.mouseEnabled || child.cursor === 'pointer' || hasListeners || /btn|choice|ans|opt/i.test(child.name || '');
-            if (isClickable) {
-                const innerTexts = extractCanvasTexts(child, 2).map(t => t.text).join(' ');
-                buttons.push({ obj: child, name: child.name || '', label: innerTexts });
+            if (child.hasEventListener?.('click') || child.hasEventListener?.('mousedown') || child.cursor === 'pointer' || child.buttonMode) {
+                const texts = extractCreateJSTexts(child).map(t => t.text).join(' ');
+                clickables.push({ obj: child, label: texts });
             }
             if (child.children && child.children.length > 0) {
-                buttons.push(...findCanvasClickables(child, maxDepth, curDepth + 1));
+                clickables.push(...findCreateJSClickables(child, maxDepth, curDepth + 1));
             }
         }
-        return buttons;
+        return clickables;
     }
 
-    // Kích hoạt click trên Canvas MovieClip / Button
-    function clickCanvasObject(obj) {
+    function clickCreateJS(obj, stage) {
         if (!obj) return false;
         try {
             if (win.createjs?.MouseEvent) {
-                const evtDown = new win.createjs.MouseEvent('mousedown', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
-                const evtClick = new win.createjs.MouseEvent('click', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
-                const evtUp = new win.createjs.MouseEvent('pressup', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
-                obj.dispatchEvent(evtDown);
-                obj.dispatchEvent(evtClick);
-                obj.dispatchEvent(evtUp);
-            } else {
-                obj.dispatchEvent('mousedown');
-                obj.dispatchEvent('click');
-                obj.dispatchEvent('pressup');
+                const ev = new win.createjs.MouseEvent('click', true, true, 0, 0, null, 0, true, 0);
+                obj.dispatchEvent(ev);
+                if (stage && typeof stage.update === 'function') stage.update();
+                return true;
             }
-            return true;
-        } catch (e) {
-            try {
-                if (typeof obj.onClick === 'function') obj.onClick();
-            } catch (err) {}
-            return false;
+        } catch (e) {}
+        return false;
+    }
+
+    /* ================= 3. DISPATCH CANVAS CLICK / KEYBOARD ================= */
+    function dispatchCanvasClick(canvas, x, y) {
+        if (!canvas) return;
+        const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y };
+        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+        canvas.dispatchEvent(new MouseEvent('mouseup', opts));
+        canvas.dispatchEvent(new MouseEvent('click', opts));
+    }
+
+    function typeCanvasString(str) {
+        const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas');
+        const target = canvas || win;
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            const code = char.toUpperCase().charCodeAt(0);
+            const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, keyCode: code, which: code, bubbles: true };
+            target.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+            target.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
+            target.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
         }
     }
 
-    // Tự gõ đáp án vào Canvas Game bằng Keyboard Event
-    function typeIntoCanvas(ansStr) {
-        if (!ansStr) return;
-        const target = win.document.querySelector('canvas') || win;
-        for (let i = 0; i < ansStr.length; i++) {
-            const ch = ansStr[i];
-            const code = `Key${ch.toUpperCase()}`;
-            const keyEventProps = {
-                key: ch,
-                code: code,
-                charCode: ch.charCodeAt(0),
-                keyCode: ch.charCodeAt(0),
-                which: ch.charCodeAt(0),
-                bubbles: true,
-                cancelable: true
-            };
-            target.dispatchEvent(new KeyboardEvent('keydown', keyEventProps));
-            target.dispatchEvent(new KeyboardEvent('keypress', keyEventProps));
-            target.dispatchEvent(new KeyboardEvent('keyup', keyEventProps));
-        }
-        IOE.toast(`✍️ Đã gõ Canvas: ${ansStr}`, 1200);
-    }
-
-    // Quét câu hỏi và tự động giải trên Canvas
+    /* ================= 4. UNIFIED CANVAS SOLVER ================= */
     async function solveCanvasGame() {
-        const { root, stage } = getStageAndRoot();
-        if (!root && !stage) return false;
+        // 1. Kiểm tra Cocos2d-JS Engine
+        const cocosScene = getCocosScene();
+        if (cocosScene) {
+            const cocosTexts = extractCocosTexts(cocosScene);
+            if (cocosTexts.length > 0) {
+                const rawStrings = cocosTexts.map(t => t.text);
+                console.log('[YANZIOE Cocos] Scanned texts:', rawStrings);
+                const questionText = rawStrings.join(' ');
+                IOE.toast(`🎮 Bắt được Minigame Cocos2d: ${rawStrings[0]}`, 1500);
 
-        const texts = extractCanvasTexts(root || stage);
-        if (!texts.length) return false;
-
-        // Lọc câu hỏi dài nhất
-        const questionObj = texts.reduce((max, cur) => cur.text.length > max.text.length ? cur : max, texts[0]);
-        const qText = questionObj.text;
-        if (qText.length < 5) return false;
-
-        const buttons = findCanvasClickables(root || stage);
-        const options = buttons.map(b => b.label || b.name).filter(Boolean);
-
-        const qId = `canvas_${qText.slice(0, 30)}`;
-        let meta = IOE.state.solvedMeta.get(qId);
-        if (!meta) {
-            meta = await IOE.question.solveQuestion(qId, qText, options);
-        }
-
-        if (meta?.answer) {
-            const ans = meta.answer.trim().toLowerCase();
-            // Nếu có các nút trắc nghiệm trong Canvas
-            if (buttons.length > 0) {
-                const matchedBtn = buttons.find(b => {
-                    const l = (b.label || '').toLowerCase();
-                    const n = (b.name || '').toLowerCase();
-                    return l.includes(ans) || ans.includes(l) || n.includes(ans) || (ans === 'a' && /a\b|opt0|btn1/i.test(n));
-                });
-                if (matchedBtn) {
-                    clickCanvasObject(matchedBtn.obj);
-                    IOE.toast(`🎯 Canvas Click: ${matchedBtn.label || matchedBtn.name}`, 1200);
+                const meta = await IOE.question?.solveQuestion(null, questionText, rawStrings);
+                if (meta?.answer) {
+                    const clickables = findCocosClickables(cocosScene);
+                    for (const c of clickables) {
+                        if (c.text.toLowerCase().includes(String(meta.answer).toLowerCase())) {
+                            clickCocosNode(c.node);
+                            IOE.toast(`⚡ Đã tự click đáp án: ${meta.answer}`, 1500);
+                            return true;
+                        }
+                    }
+                    typeCanvasString(String(meta.answer));
                     return true;
                 }
             }
-            // Nếu là dạng điền từ
-            typeIntoCanvas(meta.answer);
-            return true;
         }
+
+        // 2. Kiểm tra CreateJS / EaselJS
+        const { stage, root } = getStageAndRoot();
+        if (root) {
+            const texts = extractCreateJSTexts(root);
+            if (texts.length > 0) {
+                const fullText = texts.map(t => t.text).join(' ');
+                const meta = await IOE.question?.solveQuestion(null, fullText, texts.map(t => t.text));
+                if (meta?.answer) {
+                    const clickables = findCreateJSClickables(root);
+                    for (const c of clickables) {
+                        if (c.label.toLowerCase().includes(String(meta.answer).toLowerCase())) {
+                            clickCreateJS(c.obj, stage);
+                            return true;
+                        }
+                    }
+                    typeCanvasString(String(meta.answer));
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
     IOE.canvas = {
-        getStageAndRoot,
-        extractCanvasTexts,
-        findCanvasClickables,
-        clickCanvasObject,
-        typeIntoCanvas,
-        solveCanvasGame
+        solveCanvasGame,
+        getCocosScene,
+        extractCocosTexts,
+        findCocosClickables,
+        clickCocosNode,
+        extractCreateJSTexts,
+        findCreateJSClickables,
+        clickCreateJS,
+        typeCanvasString
     };
 })(typeof window !== 'undefined' ? window : globalThis);

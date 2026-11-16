@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.0.1
-// @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ cả HTML5 Canvas CreateJS và Web DOM)
+// @version      1.0.2
+// @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
 // @match        *://*.ioe.vn/*
@@ -13,6 +13,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @noframes     false
 // ==/UserScript==
 
 /* --- utils/utils.js --- */
@@ -409,15 +410,124 @@ Question: ${qText}${optsText}`;
     const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
-    /* ================= CREATEJS / ADOBE ANIMATE CANVAS ENGINE ================= */
+    /* ================= 1. COCOS2D-JS / COCOS CREATOR ENGINE ================= */
+    // IOE games like "Lâu đài trên mây", "Thủ môn bắt bóng", v.v. sử dụng Cocos2d-JS
+    function getCocosScene() {
+        try {
+            const cc = win.cc;
+            if (cc && cc.director && typeof cc.director.getScene === 'function') {
+                return cc.director.getScene();
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // Đệ quy quét toàn bộ text trong cây đối tượng Cocos2d
+    function extractCocosTexts(node, maxDepth = 10, curDepth = 0) {
+        if (!node || curDepth > maxDepth) return [];
+        const results = [];
+        try {
+            // 1. Kiểm tra Label Component
+            let labelComp = null;
+            if (typeof node.getComponent === 'function') {
+                const cc = win.cc;
+                if (cc && cc.Label) labelComp = node.getComponent(cc.Label);
+                if (!labelComp && cc && cc.RichText) labelComp = node.getComponent(cc.RichText);
+                if (!labelComp && cc && cc.EditBox) labelComp = node.getComponent(cc.EditBox);
+            }
+
+            const strVal = labelComp?.string || node._string || node.string;
+            if (strVal && typeof strVal === 'string') {
+                const clean = strVal.trim();
+                if (clean.length > 0) {
+                    results.push({ node, text: clean, comp: labelComp });
+                }
+            }
+
+            // 2. Quét các node con
+            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+            for (const child of children) {
+                results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));
+            }
+        } catch (e) {}
+        return results;
+    }
+
+    // Tìm các nút bấm có thể click được trong Cocos2d
+    function findCocosClickables(node, maxDepth = 10, curDepth = 0) {
+        if (!node || curDepth > maxDepth) return [];
+        const results = [];
+        try {
+            const cc = win.cc;
+            let hasBtn = false;
+            if (typeof node.getComponent === 'function' && cc?.Button) {
+                hasBtn = !!node.getComponent(cc.Button);
+            }
+            if (hasBtn || node._hasClickEventListener || node._touchListener) {
+                const txt = extractCocosTexts(node).map(t => t.text).join(' ');
+                results.push({ node, text: txt });
+            }
+
+            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+            for (const child of children) {
+                results.push(...findCocosClickables(child, maxDepth, curDepth + 1));
+            }
+        } catch (e) {}
+        return results;
+    }
+
+    // Kích hoạt click vào một Node trong Cocos2d
+    function clickCocosNode(node) {
+        if (!node) return false;
+        try {
+            const cc = win.cc;
+            // Cách 1: Kích hoạt Button component
+            if (typeof node.getComponent === 'function' && cc?.Button) {
+                const btn = node.getComponent(cc.Button);
+                if (btn) {
+                    if (Array.isArray(btn.clickEvents)) {
+                        for (const ev of btn.clickEvents) {
+                            if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);
+                        }
+                    }
+                    if (typeof btn._onTouchEnded === 'function') {
+                        btn._onTouchEnded({});
+                        return true;
+                    }
+                }
+            }
+
+            // Cách 2: Bắn Event TOUCH_END trên Node
+            if (typeof node.emit === 'function') {
+                node.emit('touchend');
+                node.emit('click');
+                return true;
+            }
+
+            // Cách 3: Dispatch native touch / mouse qua canvas
+            const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas');
+            if (canvas && typeof node.convertToWorldSpaceAR === 'function') {
+                const worldPos = node.convertToWorldSpaceAR(cc.v2(0, 0));
+                const rect = canvas.getBoundingClientRect();
+                const clientX = rect.left + worldPos.x;
+                const clientY = rect.bottom - worldPos.y; // Cocos trục Y từ dưới lên
+                dispatchCanvasClick(canvas, clientX, clientY);
+                return true;
+            }
+        } catch (err) {
+            console.warn('[YANZIOE Cocos] clickCocosNode error:', err);
+        }
+        return false;
+    }
+
+    /* ================= 2. CREATEJS / EASELJS CANVAS ENGINE ================= */
     function getStageAndRoot() {
         const stage = win.stage || win.exportRoot?.stage || null;
         const root = win.exportRoot || null;
         return { stage, root };
     }
 
-    // Đệ quy quét toàn bộ text hiển thị trong Canvas
-    function extractCanvasTexts(container, maxDepth = 6, curDepth = 0) {
+    function extractCreateJSTexts(container, maxDepth = 6, curDepth = 0) {
         if (!container || curDepth > maxDepth) return [];
         const texts = [];
         const children = container.children || [];
@@ -427,130 +537,125 @@ Question: ${qText}${optsText}`;
                 if (t && t.length > 1) texts.push({ obj: child, text: t });
             }
             if (child.children && child.children.length > 0) {
-                texts.push(...extractCanvasTexts(child, maxDepth, curDepth + 1));
+                texts.push(...extractCreateJSTexts(child, maxDepth, curDepth + 1));
             }
         }
         return texts;
     }
 
-    // Đệ quy tìm các nút bấm (MovieClip có event click hoặc mouseEnabled)
-    function findCanvasClickables(container, maxDepth = 6, curDepth = 0) {
+    function findCreateJSClickables(container, maxDepth = 6, curDepth = 0) {
         if (!container || curDepth > maxDepth) return [];
-        const buttons = [];
+        const clickables = [];
         const children = container.children || [];
         for (const child of children) {
-            const hasListeners = child._listeners && (child._listeners.click || child._listeners.mousedown);
-            const isClickable = child.mouseEnabled || child.cursor === 'pointer' || hasListeners || /btn|choice|ans|opt/i.test(child.name || '');
-            if (isClickable) {
-                const innerTexts = extractCanvasTexts(child, 2).map(t => t.text).join(' ');
-                buttons.push({ obj: child, name: child.name || '', label: innerTexts });
+            if (child.hasEventListener?.('click') || child.hasEventListener?.('mousedown') || child.cursor === 'pointer' || child.buttonMode) {
+                const texts = extractCreateJSTexts(child).map(t => t.text).join(' ');
+                clickables.push({ obj: child, label: texts });
             }
             if (child.children && child.children.length > 0) {
-                buttons.push(...findCanvasClickables(child, maxDepth, curDepth + 1));
+                clickables.push(...findCreateJSClickables(child, maxDepth, curDepth + 1));
             }
         }
-        return buttons;
+        return clickables;
     }
 
-    // Kích hoạt click trên Canvas MovieClip / Button
-    function clickCanvasObject(obj) {
+    function clickCreateJS(obj, stage) {
         if (!obj) return false;
         try {
             if (win.createjs?.MouseEvent) {
-                const evtDown = new win.createjs.MouseEvent('mousedown', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
-                const evtClick = new win.createjs.MouseEvent('click', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
-                const evtUp = new win.createjs.MouseEvent('pressup', true, true, obj.x || 0, obj.y || 0, null, 0, true, 0);
-                obj.dispatchEvent(evtDown);
-                obj.dispatchEvent(evtClick);
-                obj.dispatchEvent(evtUp);
-            } else {
-                obj.dispatchEvent('mousedown');
-                obj.dispatchEvent('click');
-                obj.dispatchEvent('pressup');
+                const ev = new win.createjs.MouseEvent('click', true, true, 0, 0, null, 0, true, 0);
+                obj.dispatchEvent(ev);
+                if (stage && typeof stage.update === 'function') stage.update();
+                return true;
             }
-            return true;
-        } catch (e) {
-            try {
-                if (typeof obj.onClick === 'function') obj.onClick();
-            } catch (err) {}
-            return false;
+        } catch (e) {}
+        return false;
+    }
+
+    /* ================= 3. DISPATCH CANVAS CLICK / KEYBOARD ================= */
+    function dispatchCanvasClick(canvas, x, y) {
+        if (!canvas) return;
+        const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y };
+        canvas.dispatchEvent(new MouseEvent('mousedown', opts));
+        canvas.dispatchEvent(new MouseEvent('mouseup', opts));
+        canvas.dispatchEvent(new MouseEvent('click', opts));
+    }
+
+    function typeCanvasString(str) {
+        const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas');
+        const target = canvas || win;
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            const code = char.toUpperCase().charCodeAt(0);
+            const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, keyCode: code, which: code, bubbles: true };
+            target.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+            target.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
+            target.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
         }
     }
 
-    // Tự gõ đáp án vào Canvas Game bằng Keyboard Event
-    function typeIntoCanvas(ansStr) {
-        if (!ansStr) return;
-        const target = win.document.querySelector('canvas') || win;
-        for (let i = 0; i < ansStr.length; i++) {
-            const ch = ansStr[i];
-            const code = `Key${ch.toUpperCase()}`;
-            const keyEventProps = {
-                key: ch,
-                code: code,
-                charCode: ch.charCodeAt(0),
-                keyCode: ch.charCodeAt(0),
-                which: ch.charCodeAt(0),
-                bubbles: true,
-                cancelable: true
-            };
-            target.dispatchEvent(new KeyboardEvent('keydown', keyEventProps));
-            target.dispatchEvent(new KeyboardEvent('keypress', keyEventProps));
-            target.dispatchEvent(new KeyboardEvent('keyup', keyEventProps));
-        }
-        IOE.toast(`✍️ Đã gõ Canvas: ${ansStr}`, 1200);
-    }
-
-    // Quét câu hỏi và tự động giải trên Canvas
+    /* ================= 4. UNIFIED CANVAS SOLVER ================= */
     async function solveCanvasGame() {
-        const { root, stage } = getStageAndRoot();
-        if (!root && !stage) return false;
+        // 1. Kiểm tra Cocos2d-JS Engine
+        const cocosScene = getCocosScene();
+        if (cocosScene) {
+            const cocosTexts = extractCocosTexts(cocosScene);
+            if (cocosTexts.length > 0) {
+                const rawStrings = cocosTexts.map(t => t.text);
+                console.log('[YANZIOE Cocos] Scanned texts:', rawStrings);
+                const questionText = rawStrings.join(' ');
+                IOE.toast(`🎮 Bắt được Minigame Cocos2d: ${rawStrings[0]}`, 1500);
 
-        const texts = extractCanvasTexts(root || stage);
-        if (!texts.length) return false;
-
-        // Lọc câu hỏi dài nhất
-        const questionObj = texts.reduce((max, cur) => cur.text.length > max.text.length ? cur : max, texts[0]);
-        const qText = questionObj.text;
-        if (qText.length < 5) return false;
-
-        const buttons = findCanvasClickables(root || stage);
-        const options = buttons.map(b => b.label || b.name).filter(Boolean);
-
-        const qId = `canvas_${qText.slice(0, 30)}`;
-        let meta = IOE.state.solvedMeta.get(qId);
-        if (!meta) {
-            meta = await IOE.question.solveQuestion(qId, qText, options);
-        }
-
-        if (meta?.answer) {
-            const ans = meta.answer.trim().toLowerCase();
-            // Nếu có các nút trắc nghiệm trong Canvas
-            if (buttons.length > 0) {
-                const matchedBtn = buttons.find(b => {
-                    const l = (b.label || '').toLowerCase();
-                    const n = (b.name || '').toLowerCase();
-                    return l.includes(ans) || ans.includes(l) || n.includes(ans) || (ans === 'a' && /a\b|opt0|btn1/i.test(n));
-                });
-                if (matchedBtn) {
-                    clickCanvasObject(matchedBtn.obj);
-                    IOE.toast(`🎯 Canvas Click: ${matchedBtn.label || matchedBtn.name}`, 1200);
+                const meta = await IOE.question?.solveQuestion(null, questionText, rawStrings);
+                if (meta?.answer) {
+                    const clickables = findCocosClickables(cocosScene);
+                    for (const c of clickables) {
+                        if (c.text.toLowerCase().includes(String(meta.answer).toLowerCase())) {
+                            clickCocosNode(c.node);
+                            IOE.toast(`⚡ Đã tự click đáp án: ${meta.answer}`, 1500);
+                            return true;
+                        }
+                    }
+                    typeCanvasString(String(meta.answer));
                     return true;
                 }
             }
-            // Nếu là dạng điền từ
-            typeIntoCanvas(meta.answer);
-            return true;
         }
+
+        // 2. Kiểm tra CreateJS / EaselJS
+        const { stage, root } = getStageAndRoot();
+        if (root) {
+            const texts = extractCreateJSTexts(root);
+            if (texts.length > 0) {
+                const fullText = texts.map(t => t.text).join(' ');
+                const meta = await IOE.question?.solveQuestion(null, fullText, texts.map(t => t.text));
+                if (meta?.answer) {
+                    const clickables = findCreateJSClickables(root);
+                    for (const c of clickables) {
+                        if (c.label.toLowerCase().includes(String(meta.answer).toLowerCase())) {
+                            clickCreateJS(c.obj, stage);
+                            return true;
+                        }
+                    }
+                    typeCanvasString(String(meta.answer));
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
     IOE.canvas = {
-        getStageAndRoot,
-        extractCanvasTexts,
-        findCanvasClickables,
-        clickCanvasObject,
-        typeIntoCanvas,
-        solveCanvasGame
+        solveCanvasGame,
+        getCocosScene,
+        extractCocosTexts,
+        findCocosClickables,
+        clickCocosNode,
+        extractCreateJSTexts,
+        findCreateJSClickables,
+        clickCreateJS,
+        typeCanvasString
     };
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -785,7 +890,7 @@ Question: ${qText}${optsText}`;
 
         const root = document.createElement('div');
         root.id = 'yanzioe-root';
-        root.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999998;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;';
+        root.style.cssText = 'position:fixed;top:15px;right:15px;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;';
 
         root.innerHTML = `
             <style>
@@ -796,26 +901,28 @@ Question: ${qText}${optsText}`;
                     100% { color: #38bdf8; text-shadow: 0 0 8px rgba(56,189,248,0.6); }
                 }
                 .yanz-rgb-text { animation: ioeRgb 4s linear infinite; }
-                .yanz-toggle { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; cursor: pointer; font-size: 11.5px; color: #e2e8f0; }
+                .yanz-toggle { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; cursor: pointer; font-size: 11.5px; color: #e2e8f0; user-select: none; }
                 .yanz-toggle input { cursor: pointer; accent-color: #38bdf8; width: 14px; height: 14px; }
             </style>
-            <div id="yanzioe-panel" style="width:230px;background:rgba(15,23,42,0.92);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.35);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.5);color:#f8fafc;overflow:hidden;">
+            <div id="yanzioe-panel" style="width:235px;background:rgba(15,23,42,0.95);backdrop-filter:blur(14px);border:1px solid rgba(56,189,248,0.4);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#f8fafc;overflow:hidden;">
                 <!-- Header -->
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(30,41,59,0.7);border-bottom:1px solid rgba(56,189,248,0.2);cursor:move;" id="yanzioe-drag-handle">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(30,41,59,0.85);border-bottom:1px solid rgba(56,189,248,0.25);cursor:move;" id="yanzioe-drag-handle">
                     <div style="display:flex;align-items:center;gap:6px;">
                         <span style="font-size:14px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13px;letter-spacing:0.5px;">YANZIOE</strong>
-                        <span style="background:#0369a1;color:#fff;font-size:9px;padding:1px 4px;border-radius:4px;font-weight:700;">v1.0</span>
+                        <span style="background:#0284c7;color:#fff;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700;">VIP v1.0.2</span>
                     </div>
-                    <button id="yanzioe-min-btn" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:12px;">▼</button>
+                    <div style="display:flex;gap:4px;">
+                        <button id="yanzioe-min-btn" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:12px;padding:2px 4px;">▼</button>
+                    </div>
                 </div>
 
                 <!-- Body -->
                 <div id="yanzioe-body" style="padding:10px 12px;">
                     <!-- Action Buttons -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
-                        <button id="yanzioe-solve-btn" style="background:#0284c7;color:#fff;border:none;border-radius:6px;padding:5px 0;font-weight:700;font-size:11px;cursor:pointer;">⚡ Giải ngay</button>
-                        <button id="yanzioe-key-btn" style="background:#1e293b;color:#38bdf8;border:1px solid rgba(56,189,248,0.4);border-radius:6px;padding:5px 0;font-weight:700;font-size:11px;cursor:pointer;">🔑 Đổi Key</button>
+                        <button id="yanzioe-solve-btn" style="background:linear-gradient(135deg, #0284c7, #2563eb);color:#fff;border:none;border-radius:6px;padding:6px 0;font-weight:700;font-size:11.5px;cursor:pointer;box-shadow:0 2px 8px rgba(2,132,199,0.4);">⚡ Giải ngay</button>
+                        <button id="yanzioe-key-btn" style="background:#1e293b;color:#38bdf8;border:1px solid rgba(56,189,248,0.4);border-radius:6px;padding:6px 0;font-weight:700;font-size:11.5px;cursor:pointer;">🔑 Đổi Key</button>
                     </div>
 
                     <!-- Toggles -->
@@ -829,48 +936,66 @@ Question: ${qText}${optsText}`;
                             <input type="checkbox" id="yanz-chk-auto" ${IOE.features.autoAnswer ? 'checked' : ''}>
                         </label>
                         <label class="yanz-toggle">
+                            <span>Quét Cocos2d / Canvas</span>
+                            <input type="checkbox" id="yanz-chk-canvas" checked>
+                        </label>
+                        <label class="yanz-toggle">
                             <span>Chặn đếm ngược giờ</span>
                             <input type="checkbox" id="yanz-chk-freeze" ${IOE.features.freezeTimer ? 'checked' : ''}>
                         </label>
                         <label class="yanz-toggle">
-                            <span>Mèo Oneko</span>
-                            <input type="checkbox" id="yanz-chk-oneko" ${IOE.features.oneko ? 'checked' : ''}>
-                        </label>
-                        <label class="yanz-toggle">
-                            <span>Stream Mode (Ẩn)</span>
+                            <span>Stream Mode (Ẩn menu)</span>
                             <input type="checkbox" id="yanz-chk-stream" ${IOE.features.streamMode ? 'checked' : ''}>
                         </label>
                     </div>
 
-                    <div style="margin-top:8px;font-size:10px;color:#64748b;text-align:center;">
-                        Bấm <strong>Alt+H</strong> để ẩn/hiện menu
+                    <div style="font-size:10px;color:#94a3b8;margin-top:8px;text-align:center;border-top:1px solid rgba(51,65,85,0.4);padding-top:6px;">
+                        Phím tắt: <strong>Alt + H</strong> ẩn/hiện menu
                     </div>
                 </div>
             </div>
+
+            <!-- Mini Floater Pill when minimized -->
+            <div id="yanzioe-pill" style="display:none;position:fixed;top:15px;right:15px;background:rgba(15,23,42,0.92);border:1px solid #38bdf8;border-radius:20px;padding:5px 12px;color:#38bdf8;font-weight:700;font-size:11px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+                🌐 YANZIOE VIP
+            </div>
         `;
+
         document.body.appendChild(root);
 
         // Bind events
+        const panel = document.getElementById('yanzioe-panel');
+        const pill = document.getElementById('yanzioe-pill');
+
+        pill?.addEventListener('click', () => {
+            panel.style.display = 'block';
+            pill.style.display = 'none';
+        });
+
         document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {
             IOE.features.showAnswers = e.target.checked;
         });
+
         document.getElementById('yanz-chk-auto')?.addEventListener('change', (e) => {
             IOE.features.autoAnswer = e.target.checked;
-            IOE.toast(e.target.checked ? '⚡ Bật tự động giải & nộp' : '⏸ Tắt tự động giải', 1200);
+            IOE.toast(e.target.checked ? '⚡ Bật Auto-Answer (Tự động giải)' : '⏸ Đã tắt Auto-Answer', 1200);
         });
+
         document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {
             IOE.features.freezeTimer = e.target.checked;
         });
-        document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {
-            IOE.features.oneko = e.target.checked;
-        });
+
         document.getElementById('yanz-chk-stream')?.addEventListener('change', (e) => {
             IOE.features.streamMode = e.target.checked;
             toggleStreamMode(e.target.checked);
         });
 
-        document.getElementById('yanzioe-solve-btn')?.addEventListener('click', () => {
-            if (IOE.canvas?.solveCanvasGame) IOE.canvas.solveCanvasGame();
+        document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {
+            IOE.toast('🔍 Đang bóc tách đề thi & tìm đáp án...', 1200);
+            if (IOE.canvas?.solveCanvasGame) {
+                const res = await IOE.canvas.solveCanvasGame();
+                if (res) return;
+            }
             if (IOE.auto?.stepOnce) IOE.auto.stepOnce();
         });
 
@@ -885,17 +1010,12 @@ Question: ${qText}${optsText}`;
         });
 
         document.getElementById('yanzioe-min-btn')?.addEventListener('click', () => {
-            const b = document.getElementById('yanzioe-body');
-            const btn = document.getElementById('yanzioe-min-btn');
-            if (b && btn) {
-                const isHidden = b.style.display === 'none';
-                b.style.display = isHidden ? 'block' : 'none';
-                btn.innerText = isHidden ? '▼' : '▲';
-            }
+            panel.style.display = 'none';
+            if (pill) pill.style.display = 'block';
         });
 
         // Hotkey Alt+H
-        window.addEventListener('keydown', (e) => {
+        win.addEventListener('keydown', (e) => {
             if (e.altKey && e.code === 'KeyH') {
                 e.preventDefault();
                 isMenuVisible = !isMenuVisible;
@@ -915,4 +1035,10 @@ Question: ${qText}${optsText}`;
     }
 
     IOE.onBodyReady(createMainMenu);
+    // Extra safety polling in case of dynamic SPA root reloads
+    setInterval(() => {
+        if (!document.getElementById('yanzioe-root') && document.body) {
+            createMainMenu();
+        }
+    }, 1500);
 })(typeof window !== 'undefined' ? window : globalThis);
