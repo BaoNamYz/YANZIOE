@@ -221,10 +221,15 @@
                 const hasAll11Bypass = clozeBypassed && Object.keys(clozeBypassed).length >= 11 && clozeBypassed['11'] === 'citizenship';
                 log('15. Deep Runtime Bypass extracts 100% exact answers (tans) from Cocos ClientData / AppModel', bypassSuccess && hasAll11Bypass);
 
+                // Test 16: Cloze Passage with empty rows array [] (Canvas Engine mode)
+                const clozeEmptyRows = await window.IOE.question.solveClozePassage(mockPassage, []);
+                const hasAll11Empty = clozeEmptyRows && Object.keys(clozeEmptyRows).length >= 11 && clozeEmptyRows["1"] === "multicultural" && clozeEmptyRows["2"] === "from" && clozeEmptyRows["11"] === "citizenship";
+                log('16. Cloze Passage solves all 11 questions directly without requiring rows array (Canvas Engine mode)', hasAll11Empty);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 15;
+                const allPassed = failCount === 0 && passCount >= 16;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/15 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount}/16 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';

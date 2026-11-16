@@ -121,7 +121,7 @@ def write_extension_dir(target_dir, code, name_suffix=""):
             "https://generativelanguage.googleapis.com/*",
             "https://openrouter.ai/*"
         ],
-        "permissions": ["activeTab", "scripting"],
+        "permissions": ["activeTab", "scripting", "storage"],
         "web_accessible_resources": [
             {
                 "resources": ["content.js", "YANZIOE.js"],

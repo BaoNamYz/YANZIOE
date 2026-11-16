@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YANZIOE VIP  - IOE.vn Tool",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn (Cocos2d, CreateJS & DOM)",
   "content_scripts": [
     {
@@ -32,7 +32,8 @@
   ],
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "web_accessible_resources": [
     {

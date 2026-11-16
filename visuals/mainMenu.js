@@ -19,6 +19,15 @@
                 localStorage.getItem('IOE_API_KEY'),
                 localStorage.getItem('YANZIOE_API_KEY'),
                 (function () {
+                    try { return sessionStorage.getItem('IOE_API_KEY') || sessionStorage.getItem('YANZIOE_API_KEY'); } catch (e) { return ''; }
+                })(),
+                (function () {
+                    try {
+                        const wn = JSON.parse(window.name || '{}');
+                        return wn.IOE_API_KEY || wn.apiKey || '';
+                    } catch (e) { return ''; }
+                })(),
+                (function () {
                     const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || '');
                     return m ? decodeURIComponent(m[1]) : '';
                 })(),
@@ -64,6 +73,16 @@
             if (key) {
                 localStorage.setItem('IOE_API_KEY', key);
                 localStorage.setItem('YANZIOE_API_KEY', key);
+                try {
+                    sessionStorage.setItem('IOE_API_KEY', key);
+                    sessionStorage.setItem('YANZIOE_API_KEY', key);
+                } catch (e) {}
+                try {
+                    let wn = {};
+                    try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
+                    wn.IOE_API_KEY = key;
+                    window.name = JSON.stringify(wn);
+                } catch (e) {}
                 try {
                     document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`;
                 } catch (e) {}
@@ -130,7 +149,7 @@
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.0.9</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.0</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -258,7 +277,7 @@
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.0.9 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.1.0 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>

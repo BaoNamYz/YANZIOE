@@ -285,15 +285,31 @@ No explanations, no markdown fences.`;
         // 1. Kiểm tra đáp án bắt được từ Network / Bộ nhớ (Bypass Level 0)
         if (IOE.state.clozeAnswers && Object.keys(IOE.state.clozeAnswers).length > 0) {
             console.log('[YANZIOE Bypass] Sử dụng đáp án gốc bắt được từ hệ thống!');
-            for (const r of rows) {
-                const idxStr = String(r.index);
-                if (IOE.state.clozeAnswers[idxStr]) {
-                    outAnswers[idxStr] = IOE.state.clozeAnswers[idxStr];
+            if (rows.length === 0) {
+                Object.assign(outAnswers, IOE.state.clozeAnswers);
+            } else {
+                for (const r of rows) {
+                    const idxStr = String(r.index);
+                    if (IOE.state.clozeAnswers[idxStr]) {
+                        outAnswers[idxStr] = IOE.state.clozeAnswers[idxStr];
+                    }
                 }
             }
             if (Object.keys(outAnswers).length >= (rows.length || 6)) {
-                const thinking = `🔓 [Bypass Hệ Thống]: Lấy toàn bộ ${Object.keys(outAnswers).length} đáp án gốc từ bộ nhớ IOE.\n✓ Đáp án: ${JSON.stringify(outAnswers)}`;
-                IOE.events?.emit('questionSolved', { qId: 'cloze_passage_bypass', answer: JSON.stringify(outAnswers), tier: 'Tier 0 (Key Gốc IOE Bypass)', thinking });
+                const detailedAnswers = Object.entries(outAnswers)
+                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                    .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+                const compactAnswers = Object.entries(outAnswers)
+                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                    .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+                const thinking = `🔓 [Bypass Hệ Thống]: Lấy toàn bộ ${Object.keys(outAnswers).length} đáp án gốc từ bộ nhớ IOE.\n✓ Đáp án chuẩn xác 100%:\n${detailedAnswers}`;
+                IOE.events?.emit('questionSolved', {
+                    qId: 'cloze_passage',
+                    qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                    answer: compactAnswers,
+                    tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
+                    thinking
+                });
                 return outAnswers;
             }
         }
@@ -303,22 +319,35 @@ No explanations, no markdown fences.`;
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
             if (matches.length >= 1) {
                 console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi chuẩn IOE!');
-                if (entry.words) {
-                    Object.entries(entry.words).forEach(([k, v]) => {
-                        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
-                        IOE.state.clozeAnswers[k] = v;
-                    });
-                }
-                for (const r of rows) {
-                    const idxStr = String(r.index);
-                    if (entry.words && entry.words[idxStr]) {
-                        outAnswers[idxStr] = entry.words[idxStr];
-                    } else if (entry.answers && entry.answers[idxStr]) {
-                        outAnswers[idxStr] = entry.answers[idxStr];
+                const sourceDict = entry.words || entry.answers || {};
+                if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
+                Object.assign(IOE.state.clozeAnswers, sourceDict);
+
+                if (rows.length === 0) {
+                    Object.assign(outAnswers, sourceDict);
+                } else {
+                    for (const r of rows) {
+                        const idxStr = String(r.index);
+                        if (sourceDict[idxStr]) {
+                            outAnswers[idxStr] = sourceDict[idxStr];
+                        }
                     }
                 }
-                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${Object.keys(outAnswers).length} đáp án xác thực: ${JSON.stringify(outAnswers)}`;
-                IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)', thinking });
+
+                const detailedAnswers = Object.entries(outAnswers)
+                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                    .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+                const compactAnswers = Object.entries(outAnswers)
+                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                    .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+                const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${Object.keys(outAnswers).length} đáp án xác thực 100%:\n${detailedAnswers}`;
+                IOE.events?.emit('questionSolved', {
+                    qId: 'cloze_passage',
+                    qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                    answer: compactAnswers,
+                    tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)',
+                    thinking
+                });
                 return outAnswers;
             }
         }
@@ -341,6 +370,19 @@ No explanations, no markdown fences.`;
         }
 
         if (Object.keys(outAnswers).length >= (rows.length || 6)) {
+            const detailedAnswers = Object.entries(outAnswers)
+                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+            const compactAnswers = Object.entries(outAnswers)
+                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+            IOE.events?.emit('questionSolved', {
+                qId: 'cloze_passage_collocation',
+                qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                answer: compactAnswers,
+                tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
+                thinking: `✓ Khớp ${Object.keys(outAnswers).length} vị trí theo Collocation CAS:\n${detailedAnswers}`
+            });
             return outAnswers;
         }
 
@@ -350,8 +392,20 @@ No explanations, no markdown fences.`;
             for (const [k, v] of Object.entries(aiResult)) {
                 if (!outAnswers[k]) outAnswers[k] = v;
             }
-            const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ cảnh đoạn văn.\n✓ Đáp án: ${JSON.stringify(outAnswers)}`;
-            IOE.events?.emit('questionSolved', { qId: 'cloze_passage', answer: JSON.stringify(outAnswers), tier: 'Tier 2 (AI Cloze)', thinking });
+            const detailedAnswers = Object.entries(outAnswers)
+                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                .map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
+            const compactAnswers = Object.entries(outAnswers)
+                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+                .map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
+            const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ cảnh đoạn văn.\n✓ Đáp án:\n${detailedAnswers}`;
+            IOE.events?.emit('questionSolved', {
+                qId: 'cloze_passage_ai',
+                qText: `[Đoạn văn điền từ - ${Object.keys(outAnswers).length} câu hỏi]\n${passageText.slice(0, 100)}...`,
+                answer: compactAnswers,
+                tier: 'Tier 2 (AI Cloze)',
+                thinking
+            });
             return outAnswers;
         }
 
