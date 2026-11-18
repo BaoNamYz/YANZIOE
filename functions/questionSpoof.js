@@ -181,20 +181,18 @@ Question: ${qText}${optsText}`;
             }
         },
         {
-            keywords: ['pigneau de', 'nguyen phuc anh', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups', 'gia long'],
+            keywords: ['gia long', 'first emperor', 'nguyen dynasty', 'nguyen phuc anh', 'pigneau de', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],
             words: {
-                "1": "encounter",
+                "1": "first",
                 "2": "as",
-                "3": "target",
-                "4": "wipe out",
-                "5": "of",
-                "6": "hands",
-                "7": "where",
-                "8": "who",
-                "9": "role",
-                "10": "help",
-                "11": "equipped",
-                "12": "successful"
+                "3": "southern",
+                "4": "In spite of",
+                "5": "encounter",
+                "6": "as",
+                "7": "target",
+                "8": "wipe out",
+                "9": "of",
+                "10": "hands"
             }
         },
         {
@@ -212,6 +210,10 @@ Question: ${qText}${optsText}`;
     ];
 
     const COMMON_COLLOCATIONS = [
+        { pattern: /(?:the|was the)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+emperor/i, word: 'first' },
+        { pattern: /born\s+(?:\(\d+\)|_{2,}|\.{3,})\s+Nguyen/i, word: 'as' },
+        { pattern: /ruled over\s+(?:\(\d+\)|_{2,}|\.{3,})\s+Vietnam/i, word: 'southern' },
+        { pattern: /(?:\(\d+\)|_{2,}|\.{3,})\s+being born into/i, word: 'In spite of' },
         { pattern: /had to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+many difficulties/i, word: 'encounter' },
         { pattern: /became the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of rival groups/i, word: 'target' },
         { pattern: /attempted to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+the/i, word: 'wipe out' },

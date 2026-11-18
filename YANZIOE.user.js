@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YANZIOE VIP - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.1.3
+// @version      1.1.4
 // @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM)
 // @author       YanzBn
 // @match        *://ioe.vn/*
@@ -363,20 +363,18 @@ Question: ${qText}${optsText}`;
             }
         },
         {
-            keywords: ['pigneau de', 'nguyen phuc anh', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups', 'gia long'],
+            keywords: ['gia long', 'first emperor', 'nguyen dynasty', 'nguyen phuc anh', 'pigneau de', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],
             words: {
-                "1": "encounter",
+                "1": "first",
                 "2": "as",
-                "3": "target",
-                "4": "wipe out",
-                "5": "of",
-                "6": "hands",
-                "7": "where",
-                "8": "who",
-                "9": "role",
-                "10": "help",
-                "11": "equipped",
-                "12": "successful"
+                "3": "southern",
+                "4": "In spite of",
+                "5": "encounter",
+                "6": "as",
+                "7": "target",
+                "8": "wipe out",
+                "9": "of",
+                "10": "hands"
             }
         },
         {
@@ -394,6 +392,10 @@ Question: ${qText}${optsText}`;
     ];
 
     const COMMON_COLLOCATIONS = [
+        { pattern: /(?:the|was the)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+emperor/i, word: 'first' },
+        { pattern: /born\s+(?:\(\d+\)|_{2,}|\.{3,})\s+Nguyen/i, word: 'as' },
+        { pattern: /ruled over\s+(?:\(\d+\)|_{2,}|\.{3,})\s+Vietnam/i, word: 'southern' },
+        { pattern: /(?:\(\d+\)|_{2,}|\.{3,})\s+being born into/i, word: 'In spite of' },
         { pattern: /had to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+many difficulties/i, word: 'encounter' },
         { pattern: /became the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of rival groups/i, word: 'target' },
         { pattern: /attempted to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+the/i, word: 'wipe out' },
@@ -2142,7 +2144,7 @@ No explanations, no markdown fences.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.3</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.4</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -2270,7 +2272,7 @@ No explanations, no markdown fences.`;
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.1.3 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.1.4 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>

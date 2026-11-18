@@ -226,13 +226,13 @@
                 const hasAll11Empty = clozeEmptyRows && Object.keys(clozeEmptyRows).length >= 11 && clozeEmptyRows["1"] === "multicultural" && clozeEmptyRows["2"] === "from" && clozeEmptyRows["11"] === "citizenship";
                 log('16. Cloze Passage solves all 11 questions directly without requiring rows array (Canvas Engine mode)', hasAll11Empty);
 
-                // Test 17: Nguyen Phuc Anh / Pigneau de Behaine Cloze passage & URL sanitization
+                // Test 17: Gia Long / Nguyen Phuc Anh Cloze passage (10 questions ground truth)
                 delete window.__require;
                 window.IOE.state.clozeAnswers = {};
-                const mockHistoricalPassage = "Nguyen Phuc Anh fled to the southern coastal tip of Vietnam where by chance he met a French priest, Pigneau de Behaine, who would eventually become his trusted adviser and play a major role in his rise to power.";
+                const mockHistoricalPassage = "Gia Long was the (1) emperor of the Nguyen dynasty. Born (2) as Nguyen Phuc Anh, he was the nephew of the last Nguyen lord who ruled over (3) Vietnam. (4) being born into a royal family, he had to (5) many difficulties in his early life.";
                 const histAns = await window.IOE.question.solveClozePassage(mockHistoricalPassage, []);
-                const okHist = histAns && histAns["1"] === "encounter" && histAns["4"] === "wipe out" && histAns["5"] === "of" && histAns["6"] === "hands";
-                log('17. Solves Nguyen Phuc Anh & Pigneau de Behaine cloze test with exact historical ground truth', okHist);
+                const okHist = histAns && histAns["1"] === "first" && histAns["2"] === "as" && histAns["3"] === "southern" && histAns["4"] === "In spite of" && histAns["5"] === "encounter";
+                log('17. Solves Gia Long & Nguyen Phuc Anh cloze test with exact historical ground truth', okHist);
 
                 // Test 18: Rejects empty player strings/placeholders ("______", "") and falls back to ground truth
                 window.IOE.state.clozeAnswers = { "1": "", "2": "______", "3": "..." };
