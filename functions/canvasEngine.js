@@ -252,8 +252,53 @@
         if (!passageObj || !passageObj.text) return false;
         const passageText = passageObj.text;
 
+        // 1b. Trích xuất các hàng & lựa chọn thực tế trên màn hình để cung cấp cho AI Solver
+        const initialRows = [];
+        try {
+            const allClickables = findCocosClickables(scene);
+            const candBtns = [];
+            for (const c of allClickables) {
+                const nameLower = (c.name || '').toLowerCase();
+                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound') || nameLower.includes('time') || nameLower.includes('score')) continue;
+                if (c.worldX > 750 && c.worldY > 450) continue;
+                const t = (c.text || '').trim();
+                if (!t) continue;
+                if (/^[A-Da-d][.:)\s]/i.test(t) || (t.length >= 2 && t.length <= 40 && !/^\d+$/.test(t))) {
+                    if (!candBtns.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15)) candBtns.push(c);
+                }
+            }
+            candBtns.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
+            const grouped = [];
+            for (const btn of candBtns) {
+                let r = grouped.find(g => Math.abs(g.y - btn.worldY) < 20);
+                if (!r) { r = { y: btn.worldY, buttons: [] }; grouped.push(r); }
+                r.buttons.push(btn);
+            }
+            grouped.forEach(g => g.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));
+
+            const numLabels = [];
+            for (const tObj of allTexts) {
+                const m = /^([0-9]{1,2})[.:)]?$/.exec(tObj.text.trim());
+                if (m && tObj.worldX < 140) numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });
+            }
+
+            for (let idx = 0; idx < grouped.length; idx++) {
+                const g = grouped[idx];
+                const lbl = numLabels.find(l => Math.abs(l.worldY - g.y) < 28);
+                const rNum = lbl ? lbl.rowNumber : (idx + 1);
+                const options = g.buttons.map(b => (b.text || '').replace(/^[A-Da-d][.:)\s_-]+/i, '').trim()).filter(Boolean);
+                if (options.length >= 2) {
+                    initialRows.push({ index: rNum, rowNumber: rNum, options });
+                }
+            }
+        } catch (e) {}
+
         // 2. Lấy toàn bộ đáp án chuẩn từ Solver (Bypass / Official Knowledge Bank)
-        const fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
+        let fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
+        if (!fullAnswers || Object.keys(fullAnswers).length === 0) {
+            // Unseen passage: Gửi kèm initialRows (tùy chọn A, B, C, D trên màn hình) cho AI Solver
+            fullAnswers = await IOE.question?.solveClozePassage(passageText, initialRows);
+        }
         if (!fullAnswers || Object.keys(fullAnswers).length === 0) return false;
 
         // Giới hạn số câu hợp lý theo đề bài thực tế (tối đa 12 câu, tuyệt đối không bị tràn rác 274 câu)

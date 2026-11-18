@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YANZIOE VIP (CoKey) - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.1.4
+// @version      1.1.5
 // @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM) - Bản VIP Glassmorphism không cần nhập API Key
 // @author       YanzBn
 // @match        *://ioe.vn/*
@@ -280,16 +280,39 @@
         return null;
     }
 
-    /* ================= 4. TIER 2: AI SOLVER (GROQ / GEMINI / OPENROUTER) ================= */
+    /* ================= 4. TIER 2: AI SOLVER (GEMINI / GROQ / OPENROUTER) ================= */
+    async function callGeminiApi(apiKey, prompt) {
+        const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-exp'];
+        for (const m of models) {
+            try {
+                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { temperature: 0.1, maxOutputTokens: 1000 }
+                    })
+                });
+                if (res.ok) {
+                    const j = await res.json();
+                    const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (txt) return txt;
+                }
+            } catch (e) {}
+        }
+        return null;
+    }
+
     async function solveWithAi(qText, options = []) {
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) return null;
 
-        const isGemini = apiKey.startsWith('AIza');
+        const isGemini = apiKey.startsWith('AIza') || IOE.featureConfigs?.aiProvider === 'gemini';
         const optsText = options.length ? `\nOptions:\n${options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n')}` : '';
         const prompt = `Solve this Olympic English (IOE) question accurately.
 Return ONLY JSON format: {"answer": "..."} without any other text or markdown fences.
-If multiple choice, answer must be the exact text or option letter.
+If multiple choice, answer must be the exact text or option letter from the provided options.
 If fill in blank, answer must be the exact word.
 If sentence reorder, answer must be the full reordered sentence.
 
@@ -297,18 +320,14 @@ Question: ${qText}${optsText}`;
 
         try {
             if (isGemini) {
-                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
-                const j = await res.json();
-                const raw = j?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                const raw = await callGeminiApi(apiKey, prompt);
+                if (!raw) return null;
                 const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
                 if (m) {
-                    const parsed = JSON.parse(m[0]);
-                    return parsed.answer;
+                    try {
+                        const parsed = JSON.parse(m[0]);
+                        return parsed.answer;
+                    } catch (e) {}
                 }
                 return raw.replace(/["'{}]/g, '').trim();
             } else {
@@ -437,37 +456,28 @@ Question: ${qText}${optsText}`;
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) return null;
 
-        const isGemini = apiKey.startsWith('AIza');
+        const isGemini = apiKey.startsWith('AIza') || IOE.featureConfigs?.aiProvider === 'gemini';
         const rowsFormatted = rows.map(r => {
-            const optsStr = Array.isArray(r.options)
+            const optsStr = Array.isArray(r.options) && r.options.length
                 ? r.options.map((o, idx) => `${String.fromCharCode(65 + idx)}. ${o}`).join(' | ')
                 : '';
-            return `Blank (${r.index}): ${optsStr}`;
-        }).join('\n');
+            return `Blank (${r.index || r.rowNumber}): ${optsStr}`;
+        }).filter(Boolean).join('\n');
 
-        const prompt = `Solve this English Cloze Test passage by choosing the best option (A, B, C, or D) for each numbered blank.
+        const prompt = `You are an expert English teacher. Solve this Olympic English (IOE) Cloze Test passage accurately.
 Passage:
 ${passageText}
 
-Options:
-${rowsFormatted}
-
-Return ONLY valid JSON mapping blank number to option letter (A, B, C, or D).
-Example: {"1": "A", "2": "B", "3": "D", "4": "C", "5": "A", "6": "C"}
-No explanations, no markdown fences.`;
+${rowsFormatted ? `Choices for each blank:\n${rowsFormatted}\n` : ''}
+Choose the most grammatically and contextually correct word for each numbered blank.
+Return ONLY valid JSON mapping each blank number (string) to the exact chosen word.
+Example format: {"1": "first", "2": "as", "3": "southern", "4": "In spite of", "5": "encounter"}
+Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
 
         try {
+            let raw = null;
             if (isGemini) {
-                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
-                const j = await res.json();
-                const raw = j?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                const m = /\{[\s\S]*\}/.exec(raw);
-                if (m) return JSON.parse(m[0]);
+                raw = await callGeminiApi(apiKey, prompt);
             } else {
                 const isGroq = apiKey.startsWith('gsk_');
                 const endpoint = isGroq
@@ -487,10 +497,28 @@ No explanations, no markdown fences.`;
                         temperature: 0.1
                     })
                 });
-                const j = await res.json();
-                const raw = j?.choices?.[0]?.message?.content || '';
+                if (res.ok) {
+                    const j = await res.json();
+                    raw = j?.choices?.[0]?.message?.content || '';
+                }
+            }
+
+            if (raw) {
                 const m = /\{[\s\S]*\}/.exec(raw);
-                if (m) return JSON.parse(m[0]);
+                if (m) {
+                    const parsed = JSON.parse(m[0]);
+                    const result = {};
+                    for (const [k, v] of Object.entries(parsed)) {
+                        let word = String(v).trim();
+                        const r = rows.find(row => String(row.index || row.rowNumber) === String(k));
+                        if (r && Array.isArray(r.options) && ['A', 'B', 'C', 'D'].includes(word.toUpperCase())) {
+                            const idx = word.toUpperCase().charCodeAt(0) - 65;
+                            if (r.options[idx]) word = r.options[idx];
+                        }
+                        result[k] = word;
+                    }
+                    return result;
+                }
             }
         } catch (e) {
             console.warn('[YANZIOE AI Cloze error]', e);
@@ -570,7 +598,7 @@ No explanations, no markdown fences.`;
                     Object.assign(outAnswers, sourceDict);
                 } else {
                     for (const r of rows) {
-                        const idxStr = String(r.index);
+                        const idxStr = String(r.index || r.rowNumber);
                         if (sourceDict[idxStr]) {
                             outAnswers[idxStr] = sourceDict[idxStr];
                         }
@@ -1243,8 +1271,53 @@ No explanations, no markdown fences.`;
         if (!passageObj || !passageObj.text) return false;
         const passageText = passageObj.text;
 
+        // 1b. Trích xuất các hàng & lựa chọn thực tế trên màn hình để cung cấp cho AI Solver
+        const initialRows = [];
+        try {
+            const allClickables = findCocosClickables(scene);
+            const candBtns = [];
+            for (const c of allClickables) {
+                const nameLower = (c.name || '').toLowerCase();
+                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound') || nameLower.includes('time') || nameLower.includes('score')) continue;
+                if (c.worldX > 750 && c.worldY > 450) continue;
+                const t = (c.text || '').trim();
+                if (!t) continue;
+                if (/^[A-Da-d][.:)\s]/i.test(t) || (t.length >= 2 && t.length <= 40 && !/^\d+$/.test(t))) {
+                    if (!candBtns.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15)) candBtns.push(c);
+                }
+            }
+            candBtns.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
+            const grouped = [];
+            for (const btn of candBtns) {
+                let r = grouped.find(g => Math.abs(g.y - btn.worldY) < 20);
+                if (!r) { r = { y: btn.worldY, buttons: [] }; grouped.push(r); }
+                r.buttons.push(btn);
+            }
+            grouped.forEach(g => g.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));
+
+            const numLabels = [];
+            for (const tObj of allTexts) {
+                const m = /^([0-9]{1,2})[.:)]?$/.exec(tObj.text.trim());
+                if (m && tObj.worldX < 140) numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });
+            }
+
+            for (let idx = 0; idx < grouped.length; idx++) {
+                const g = grouped[idx];
+                const lbl = numLabels.find(l => Math.abs(l.worldY - g.y) < 28);
+                const rNum = lbl ? lbl.rowNumber : (idx + 1);
+                const options = g.buttons.map(b => (b.text || '').replace(/^[A-Da-d][.:)\s_-]+/i, '').trim()).filter(Boolean);
+                if (options.length >= 2) {
+                    initialRows.push({ index: rNum, rowNumber: rNum, options });
+                }
+            }
+        } catch (e) {}
+
         // 2. Lấy toàn bộ đáp án chuẩn từ Solver (Bypass / Official Knowledge Bank)
-        const fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
+        let fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
+        if (!fullAnswers || Object.keys(fullAnswers).length === 0) {
+            // Unseen passage: Gửi kèm initialRows (tùy chọn A, B, C, D trên màn hình) cho AI Solver
+            fullAnswers = await IOE.question?.solveClozePassage(passageText, initialRows);
+        }
         if (!fullAnswers || Object.keys(fullAnswers).length === 0) return false;
 
         // Giới hạn số câu hợp lý theo đề bài thực tế (tối đa 12 câu, tuyệt đối không bị tràn rác 274 câu)
@@ -2144,7 +2217,7 @@ No explanations, no markdown fences.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.4</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.5</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -2201,13 +2274,13 @@ No explanations, no markdown fences.`;
                 <div id="yanz-tab-settings" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:3px;">Nhà cung cấp AI giải bài:</div>
                     <select id="yanz-sel-provider" class="yanz-input" style="cursor:pointer;padding:5px;">
+                        <option value="gemini" ${(!IOE.featureConfigs?.aiProvider || IOE.featureConfigs?.aiProvider === 'gemini') ? 'selected' : ''}>🌟 Google Gemini (Khuyên dùng - Chuẩn xác & Miễn phí)</option>
                         <option value="groq" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>⚡ Groq (Llama 3.3 70B - Tốc độ 0ms)</option>
-                        <option value="gemini" ${IOE.featureConfigs?.aiProvider === 'gemini' ? 'selected' : ''}>🌟 Google Gemini API</option>
                         <option value="openrouter" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>🚀 OpenRouter (Free/Custom Models)</option>
                     </select>
 
-                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (Để trống dùng Local CAS & Free fallback):</div>
-                    <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="gsk_... hoặc AIzaSy... hoặc sk-or-..." value="${IOE.featureConfigs?.apiKey || ''}">
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (Gemini: AIzaSy... | Groq: gsk_...):</div>
+                    <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="AIzaSy... (Lấy miễn phí tại aistudio.google.com)" value="${IOE.featureConfigs?.apiKey || ''}">
                     <button id="yanz-btn-save-key" class="yanz-btn" style="margin-top:6px;padding:5px 0;background:#0369a1;">💾 Lưu & Khóa API Key</button>
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:10px;margin-bottom:3px;">

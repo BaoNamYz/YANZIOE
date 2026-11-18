@@ -240,10 +240,41 @@
                 const okFilter = filteredAns && filteredAns["1"] === "multicultural" && filteredAns["2"] === "from" && filteredAns["3"] === "set up";
                 log('18. Rejects empty strings & placeholders in clozeAnswers and extracts 100% verified ground truth', okFilter);
 
+                // Test 19: Gemini AI Solver maps both option letters and word text with mock API
+                window.IOE.featureConfigs.apiKey = 'AIzaSyMockGeminiKey123';
+                window.IOE.featureConfigs.aiProvider = 'gemini';
+                const origFetch = window.fetch;
+                window.fetch = async (url, opts) => {
+                    if (String(url).includes('generativelanguage.googleapis.com')) {
+                        return {
+                            ok: true,
+                            json: async () => ({
+                                candidates: [{
+                                    content: {
+                                        parts: [{
+                                            text: JSON.stringify({ "1": "A", "2": "explore" })
+                                        }]
+                                    }
+                                }]
+                            })
+                        };
+                    }
+                    return origFetch(url, opts);
+                };
+                const aiCustomPassage = "An unknown alien planet has (1) strange plants and astronauts want to (2) deep caves.";
+                const aiCustomRows = [
+                    { index: 1, options: ["glowing", "boring", "red", "frozen"] },
+                    { index: 2, options: ["destroy", "explore", "ignore", "forget"] }
+                ];
+                const aiSolved = await window.IOE.question.solveClozePassage(aiCustomPassage, aiCustomRows);
+                window.fetch = origFetch;
+                const ok19 = aiSolved && aiSolved["1"] === "glowing" && aiSolved["2"] === "explore";
+                log('19. Gemini AI solver accurately maps option letters ("A" -> "glowing") and words to blanks', ok19);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 18;
+                const allPassed = failCount === 0 && passCount >= 19;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/18 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount}/19 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';
