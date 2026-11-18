@@ -231,7 +231,7 @@
                 window.IOE.state.clozeAnswers = {};
                 const mockHistoricalPassage = "Nguyen Phuc Anh fled to the southern coastal tip of Vietnam where by chance he met a French priest, Pigneau de Behaine, who would eventually become his trusted adviser and play a major role in his rise to power.";
                 const histAns = await window.IOE.question.solveClozePassage(mockHistoricalPassage, []);
-                const okHist = histAns && histAns["1"] === "cope with" && histAns["4"] === "wipe out" && histAns["8"] === "role";
+                const okHist = histAns && histAns["1"] === "encounter" && histAns["4"] === "wipe out" && histAns["5"] === "of" && histAns["6"] === "hands";
                 log('17. Solves Nguyen Phuc Anh & Pigneau de Behaine cloze test with exact historical ground truth', okHist);
 
                 // Test 18: Rejects empty player strings/placeholders ("______", "") and falls back to ground truth

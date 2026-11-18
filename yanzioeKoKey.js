@@ -1,4 +1,4 @@
-/* YANZIOE VIP v1.1.2 CoKey (Pre-activated Local CAS & Free Tier) */
+/* YANZIOE VIP v1.1.3 CoKey (Pre-activated Local CAS & Free Tier) */
 /* --- utils/utils.js --- */
 (function (global) {
     'use strict';
@@ -340,19 +340,20 @@ Question: ${qText}${optsText}`;
             }
         },
         {
-            keywords: ['pigneau de', 'nguyen phuc anh', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],
+            keywords: ['pigneau de', 'nguyen phuc anh', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups', 'gia long'],
             words: {
-                "1": "cope with",
+                "1": "encounter",
                 "2": "as",
                 "3": "target",
                 "4": "wipe out",
-                "5": "hands",
-                "6": "where",
-                "7": "who",
-                "8": "role",
-                "9": "help",
-                "10": "equipped",
-                "11": "successful"
+                "5": "of",
+                "6": "hands",
+                "7": "where",
+                "8": "who",
+                "9": "role",
+                "10": "help",
+                "11": "equipped",
+                "12": "successful"
             }
         },
         {
@@ -370,6 +371,17 @@ Question: ${qText}${optsText}`;
     ];
 
     const COMMON_COLLOCATIONS = [
+        { pattern: /had to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+many difficulties/i, word: 'encounter' },
+        { pattern: /became the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of rival groups/i, word: 'target' },
+        { pattern: /attempted to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+the/i, word: 'wipe out' },
+        { pattern: /at the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of the rival leaders/i, word: 'hands' },
+        { pattern: /at the hands\s+(?:\(\d+\)|_{2,}|\.{3,})\s+the rival leaders/i, word: 'of' },
+        { pattern: /tip of Vietnam\s+(?:\(\d+\)|_{2,}|\.{3,})\s+by chance/i, word: 'where' },
+        { pattern: /Pigneau de Behaine,?\s+(?:\(\d+\)|_{2,}|\.{3,})\s+would/i, word: 'who' },
+        { pattern: /play a major\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'role' },
+        { pattern: /with the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of the priest/i, word: 'help' },
+        { pattern: /(?:and|,)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+with advanced European/i, word: 'equipped' },
+        { pattern: /he was\s+(?:\(\d+\)|_{2,}|\.{3,})\s+in securing/i, word: 'successful' },
         { pattern: /avoiding\s+(?:social\s+)?(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'conflict' },
         { pattern: /less\s+(?:\(\d+\)|_{2,}|\.{3,})\s+and\s+more\s+connected/i, word: 'lonely' },
         { pattern: /spirit\s+of\s+global\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'citizenship' },
@@ -1380,6 +1392,22 @@ No explanations, no markdown fences.`;
                     });
                 }
 
+                // 5. Kiểm tra chéo toàn bộ ngân hàng đáp án fullAnswers xem có từ nào khớp với các nút của hàng này không
+                if (!targetButton) {
+                    for (const [qNumStr, ansWord] of Object.entries(fullAnswers)) {
+                        const cleanAns = String(ansWord).toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
+                        if (!cleanAns) continue;
+                        const matchBtn = row.buttons.find(b => {
+                            const bt = b.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
+                            return bt === cleanAns || (cleanAns.length >= 3 && (bt.includes(cleanAns) || cleanAns.includes(bt)));
+                        });
+                        if (matchBtn) {
+                            targetButton = matchBtn;
+                            break;
+                        }
+                    }
+                }
+
                 if (targetButton) {
                     await clickCocosNode(targetButton.node);
                     clickedRowNumbers.add(rNum);
@@ -1388,7 +1416,8 @@ No explanations, no markdown fences.`;
 
                     const chosenIdx = row.buttons.indexOf(targetButton);
                     const chosenLetter = chosenIdx >= 0 ? String.fromCharCode(65 + chosenIdx) : '';
-                    const displayAnswer = chosenLetter ? `${chosenLetter} (${cleanTarget || targetStr})` : (cleanTarget || targetStr);
+                    const actualBtnText = targetButton.text.replace(/^[a-d][.:)\s_-]+/i, '').trim();
+                    const displayAnswer = chosenLetter ? `${chosenLetter} (${actualBtnText || cleanTarget || targetStr})` : (actualBtnText || cleanTarget || targetStr);
                     recordedAnswers[rNum] = displayAnswer;
 
                     console.log(`[YANZIOE Cocos] ✓ Đã điền chuẩn xác Câu ${rNum}: [${displayAnswer}] (Nút: ${targetButton.text})`);
@@ -2090,7 +2119,7 @@ No explanations, no markdown fences.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.2</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.3</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -2218,7 +2247,7 @@ No explanations, no markdown fences.`;
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.1.2 thành công.
+                        [YANZIOE] Khởi động hệ thống v1.1.3 thành công.
 [YANZIOE] Đã kết nối với Canvas & DOM Observer.
 [YANZIOE] Đã nạp cấu hình tự động lưu thành công.
                     </div>

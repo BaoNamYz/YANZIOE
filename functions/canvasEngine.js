@@ -426,6 +426,22 @@
                     });
                 }
 
+                // 5. Kiểm tra chéo toàn bộ ngân hàng đáp án fullAnswers xem có từ nào khớp với các nút của hàng này không
+                if (!targetButton) {
+                    for (const [qNumStr, ansWord] of Object.entries(fullAnswers)) {
+                        const cleanAns = String(ansWord).toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
+                        if (!cleanAns) continue;
+                        const matchBtn = row.buttons.find(b => {
+                            const bt = b.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
+                            return bt === cleanAns || (cleanAns.length >= 3 && (bt.includes(cleanAns) || cleanAns.includes(bt)));
+                        });
+                        if (matchBtn) {
+                            targetButton = matchBtn;
+                            break;
+                        }
+                    }
+                }
+
                 if (targetButton) {
                     await clickCocosNode(targetButton.node);
                     clickedRowNumbers.add(rNum);
@@ -434,7 +450,8 @@
 
                     const chosenIdx = row.buttons.indexOf(targetButton);
                     const chosenLetter = chosenIdx >= 0 ? String.fromCharCode(65 + chosenIdx) : '';
-                    const displayAnswer = chosenLetter ? `${chosenLetter} (${cleanTarget || targetStr})` : (cleanTarget || targetStr);
+                    const actualBtnText = targetButton.text.replace(/^[a-d][.:)\s_-]+/i, '').trim();
+                    const displayAnswer = chosenLetter ? `${chosenLetter} (${actualBtnText || cleanTarget || targetStr})` : (actualBtnText || cleanTarget || targetStr);
                     recordedAnswers[rNum] = displayAnswer;
 
                     console.log(`[YANZIOE Cocos] ✓ Đã điền chuẩn xác Câu ${rNum}: [${displayAnswer}] (Nút: ${targetButton.text})`);
