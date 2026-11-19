@@ -252,11 +252,11 @@ Question: ${qText}${optsText}`;
                 "3": "southern",
                 "4": "In spite of",
                 "5": "encounter",
-                "6": "as",
-                "7": "target",
-                "8": "wipe out",
-                "9": "of",
-                "10": "hands"
+                "6": "target",
+                "7": "wipe out",
+                "8": "hands",
+                "9": "where",
+                "10": "role"
             }
         },
         {
@@ -333,8 +333,9 @@ ${passageText}
 
 ${rowsFormatted ? `Choices for each blank:\n${rowsFormatted}\n` : ''}
 Choose the most grammatically and contextually correct word for each numbered blank.
+${rowsFormatted ? 'You MUST choose one of the provided candidate options for each blank.' : ''}
 Return ONLY valid JSON mapping each blank number (string) to the exact chosen word.
-Example format: {"1": "first", "2": "as", "3": "southern", "4": "In spite of", "5": "encounter"}
+Example format: {"1": "word1", "2": "word2"}
 Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
 
         try {

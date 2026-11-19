@@ -231,7 +231,7 @@
                 window.IOE.state.clozeAnswers = {};
                 const mockHistoricalPassage = "Gia Long was the (1) emperor of the Nguyen dynasty. Born (2) as Nguyen Phuc Anh, he was the nephew of the last Nguyen lord who ruled over (3) Vietnam. (4) being born into a royal family, he had to (5) many difficulties in his early life.";
                 const histAns = await window.IOE.question.solveClozePassage(mockHistoricalPassage, []);
-                const okHist = histAns && histAns["1"] === "first" && histAns["2"] === "as" && histAns["3"] === "southern" && histAns["4"] === "In spite of" && histAns["5"] === "encounter";
+                const okHist = histAns && histAns["1"] === "first" && histAns["2"] === "as" && histAns["3"] === "southern" && histAns["4"] === "In spite of" && histAns["5"] === "encounter" && histAns["6"] === "target" && histAns["7"] === "wipe out" && histAns["8"] === "hands" && histAns["9"] === "where" && histAns["10"] === "role";
                 log('17. Solves Gia Long & Nguyen Phuc Anh cloze test with exact historical ground truth', okHist);
 
                 // Test 18: Rejects empty player strings/placeholders ("______", "") and falls back to ground truth

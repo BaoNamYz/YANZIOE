@@ -480,11 +480,11 @@ Question: ${qText}${optsText}`;
                 "3": "southern",
                 "4": "In spite of",
                 "5": "encounter",
-                "6": "as",
-                "7": "target",
-                "8": "wipe out",
-                "9": "of",
-                "10": "hands"
+                "6": "target",
+                "7": "wipe out",
+                "8": "hands",
+                "9": "where",
+                "10": "role"
             }
         },
         {
@@ -561,8 +561,9 @@ ${passageText}
 
 ${rowsFormatted ? `Choices for each blank:\n${rowsFormatted}\n` : ''}
 Choose the most grammatically and contextually correct word for each numbered blank.
+${rowsFormatted ? 'You MUST choose one of the provided candidate options for each blank.' : ''}
 Return ONLY valid JSON mapping each blank number (string) to the exact chosen word.
-Example format: {"1": "first", "2": "as", "3": "southern", "4": "In spite of", "5": "encounter"}
+Example format: {"1": "word1", "2": "word2"}
 Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
 
         try {
@@ -1515,27 +1516,14 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
             rows.forEach(r => r.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));
 
             // Gán số thứ tự câu cho mỗi hàng:
-            // Khớp vân tay nội dung (Content Fingerprint Matching - 100% Không bao giờ lệch hàng)
-            for (const r of rows) {
-                // Ưu tiên đối chiếu với các từ đáp án trong fullAnswers để tìm số thứ tự câu chính xác
-                let matchedByWord = false;
-                for (const [qNumStr, ansWord] of Object.entries(fullAnswers)) {
-                    const cleanAns = String(ansWord).toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                    const hasMatch = r.buttons.some(b => {
-                        const bt = b.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                        return bt === cleanAns || (cleanAns.length >= 3 && (bt.includes(cleanAns) || cleanAns.includes(bt)));
-                    });
-                    if (hasMatch) {
-                        r.rowNumber = parseInt(qNumStr, 10);
-                        matchedByWord = true;
-                        break;
-                    }
-                }
-
-                if (!matchedByWord) {
-                    // Fallback nhãn số cùng Y
-                    const lbl = numLabels.find(l => Math.abs(l.worldY - r.y) < 28);
-                    if (lbl) r.rowNumber = lbl.rowNumber;
+            // Ưu tiên TUYỆT ĐỐI nhãn số thực tế trên màn hình (numLabels) để đảm bảo 100% khớp đúng hàng
+            for (let idx = 0; idx < rows.length; idx++) {
+                const r = rows[idx];
+                const lbl = numLabels.find(l => Math.abs(l.worldY - r.y) < 28);
+                if (lbl && lbl.rowNumber > 0) {
+                    r.rowNumber = lbl.rowNumber;
+                } else {
+                    r.rowNumber = idx + 1;
                 }
             }
 
@@ -1603,21 +1591,6 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                     });
                 }
 
-                // 5. Kiểm tra chéo toàn bộ ngân hàng đáp án fullAnswers xem có từ nào khớp với các nút của hàng này không
-                if (!targetButton) {
-                    for (const [qNumStr, ansWord] of Object.entries(fullAnswers)) {
-                        const cleanAns = String(ansWord).toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                        if (!cleanAns) continue;
-                        const matchBtn = row.buttons.find(b => {
-                            const bt = b.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                            return bt === cleanAns || (cleanAns.length >= 3 && (bt.includes(cleanAns) || cleanAns.includes(bt)));
-                        });
-                        if (matchBtn) {
-                            targetButton = matchBtn;
-                            break;
-                        }
-                    }
-                }
 
                 if (targetButton) {
                     await clickCocosNode(targetButton.node);
