@@ -66,12 +66,81 @@
             .replace(/'/g, '&#039;');
     }
 
+    async function requestExternal(url, options = {}) {
+        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;
+
+        // Channel 1: Extension MV3 Background Bridge (zero CSP restrictions)
+        if (document.documentElement?.dataset?.ioeBridge === '1') {
+            const bridgeRes = await new Promise((resolve) => {
+                const id = 'ioeb_' + Math.random().toString(36).slice(2) + Date.now();
+                const timer = setTimeout(() => {
+                    window.removeEventListener('message', onMsg);
+                    resolve(null);
+                }, timeoutMs);
+                function onMsg(ev) {
+                    if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_RES' || ev.data?.id !== id) return;
+                    clearTimeout(timer);
+                    window.removeEventListener('message', onMsg);
+                    resolve(ev.data.payload);
+                }
+                window.addEventListener('message', onMsg);
+                window.postMessage({
+                    type: 'IOE_BRIDGE_FETCH_REQ',
+                    id,
+                    payload: { url, method, headers, body, responseType }
+                }, '*');
+            });
+            if (bridgeRes) {
+                if (bridgeRes.error) throw new Error(bridgeRes.error);
+                return bridgeRes;
+            }
+        }
+
+        // Channel 2: Tampermonkey GM_xmlhttpRequest (zero CSP/CORS restrictions)
+        const gmXhr = typeof global.GM_xmlhttpRequest === 'function'
+            ? global.GM_xmlhttpRequest
+            : (typeof win.GM_xmlhttpRequest === 'function' ? win.GM_xmlhttpRequest : null);
+        if (gmXhr) {
+            return await new Promise((resolve) => {
+                gmXhr({
+                    method,
+                    url,
+                    headers,
+                    data: body,
+                    timeout: timeoutMs,
+                    responseType: responseType === 'base64' ? 'arraybuffer' : 'text',
+                    onload(r) {
+                        resolve({ ok: r.status >= 200 && r.status < 300, status: r.status, text: r.responseText || '' });
+                    },
+                    onerror(e) { resolve({ ok: false, status: 0, error: e?.statusText || 'GM_xhr error' }); },
+                    ontimeout() { resolve({ ok: false, status: 0, error: 'GM_xhr timeout' }); }
+                });
+            });
+        }
+
+        // Channel 3: Native fetch fallback
+        const ctrl = new AbortController();
+        const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+            const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
+            let text = '';
+            if (typeof r.text === 'function') text = await r.text();
+            else if (typeof r.json === 'function') text = JSON.stringify(await r.json());
+            return { ok: r.ok, status: r.status, text };
+        } catch (err) {
+            return { ok: false, status: 0, error: err?.message || String(err) };
+        } finally {
+            clearTimeout(tm);
+        }
+    }
+
     const ioeState = {
         events,
         toast,
         delay,
         escHtml,
         onBodyReady,
+        net: { requestExternal },
         state: {
             isSolving: false,
             currentQuestionId: null,

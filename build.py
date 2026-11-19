@@ -88,7 +88,64 @@ dist_coke_user = ROOT / 'YANZIOE_KoKey.user.js'
 dist_coke_user.write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
 print(f"[OK] Generated {dist_coke_min.name} and {dist_coke_user.name}")
 
-# 5. Helper to write Chrome Extension MV3 with MAIN world execution & Universal DOM Fallback
+# 5. Helper to write Chrome Extension MV3 with MAIN world execution, Bridge & Background Service Worker (Zero CSP/CORS)
+BRIDGE_JS = """/* YANZIOE Extension Bridge (ISOLATED World) */
+(function () {
+    'use strict';
+    document.documentElement.dataset.ioeBridge = '1';
+
+    window.addEventListener('message', function (ev) {
+        if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_REQ') return;
+        const { id, payload } = ev.data;
+        chrome.runtime.sendMessage({ type: 'IOE_FETCH', payload }, function (res) {
+            const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
+            window.postMessage({
+                type: 'IOE_BRIDGE_FETCH_RES',
+                id,
+                payload: err ? { ok: false, status: 0, error: err } : (res || { ok: false, status: 0, error: 'Empty bridge reply' })
+            }, '*');
+        });
+    });
+})();
+"""
+
+BACKGROUND_JS = """/* YANZIOE Extension Background Service Worker (CSP-Free Proxy) */
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.type !== 'IOE_FETCH' || !msg.payload?.url) return false;
+
+    const { url, method = 'GET', headers = {}, body, responseType = 'text' } = msg.payload;
+    (async () => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 28000);
+        try {
+            const init = { method, headers, signal: ctrl.signal };
+            if (body !== undefined && method.toUpperCase() !== 'GET' && method.toUpperCase() !== 'HEAD') {
+                init.body = body;
+            }
+            const resp = await fetch(url, init);
+            const contentType = resp.headers.get('content-type') || '';
+            if (responseType === 'base64') {
+                const buf = await resp.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                let bin = '';
+                for (let i = 0; i < bytes.length; i += 8192) {
+                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+                }
+                sendResponse({ ok: resp.ok, status: resp.status, text: '', base64: btoa(bin), contentType });
+            } else {
+                const text = await resp.text();
+                sendResponse({ ok: resp.ok, status: resp.status, text, base64: '', contentType });
+            }
+        } catch (err) {
+            sendResponse({ ok: false, status: 0, error: err?.message || String(err) });
+        } finally {
+            clearTimeout(timer);
+        }
+    })();
+    return true;
+});
+"""
+
 def write_extension_dir(target_dir, code, name_suffix=""):
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -96,7 +153,23 @@ def write_extension_dir(target_dir, code, name_suffix=""):
         "name": f"YANZIOE VIP {name_suffix} - IOE.vn Tool",
         "version": VERSION,
         "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn (Cocos2d, CreateJS & DOM)",
+        "background": {
+            "service_worker": "background.js"
+        },
         "content_scripts": [
+            {
+                "matches": [
+                    "*://ioe.vn/*",
+                    "*://*.ioe.vn/*",
+                    "*://*.go.vn/*",
+                    "*://*.vtc.vn/*",
+                    "*://api-edu.go.vn/*"
+                ],
+                "js": ["bridge.js"],
+                "run_at": "document_start",
+                "world": "ISOLATED",
+                "all_frames": True
+            },
             {
                 "matches": [
                     "*://ioe.vn/*",
@@ -119,12 +192,13 @@ def write_extension_dir(target_dir, code, name_suffix=""):
             "*://api-edu.go.vn/*",
             "https://api.groq.com/*",
             "https://generativelanguage.googleapis.com/*",
+            "https://aiplatform.googleapis.com/*",
             "https://openrouter.ai/*"
         ],
         "permissions": ["activeTab", "scripting", "storage"],
         "web_accessible_resources": [
             {
-                "resources": ["content.js", "YANZIOE.js"],
+                "resources": ["content.js", "YANZIOE.js", "bridge.js", "background.js"],
                 "matches": ["*://ioe.vn/*", "*://*.ioe.vn/*", "*://*.go.vn/*", "*://*.vtc.vn/*", "*://api-edu.go.vn/*"]
             }
         ]
@@ -148,9 +222,11 @@ def write_extension_dir(target_dir, code, name_suffix=""):
 """
 
     (target_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
+    (target_dir / 'bridge.js').write_text(BRIDGE_JS, encoding='utf-8')
+    (target_dir / 'background.js').write_text(BACKGROUND_JS, encoding='utf-8')
     (target_dir / 'content.js').write_text(loader_wrapper, encoding='utf-8')
     (target_dir / 'YANZIOE.js').write_text(code, encoding='utf-8')
-    print(f"[OK] Extension with MAIN world written to {target_dir.name}")
+    print(f"[OK] Extension with MAIN world & Bridge written to {target_dir.name}")
 
 # Standard Extension in Repo
 write_extension_dir(ROOT / 'YANZIOE_Extension', bundle_code, "")

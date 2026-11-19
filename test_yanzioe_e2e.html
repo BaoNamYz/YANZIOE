@@ -246,17 +246,20 @@
                 const origFetch = window.fetch;
                 window.fetch = async (url, opts) => {
                     if (String(url).includes('generativelanguage.googleapis.com')) {
+                        const mockPayload = {
+                            candidates: [{
+                                content: {
+                                    parts: [{
+                                        text: JSON.stringify({ "1": "A", "2": "explore" })
+                                    }]
+                                }
+                            }]
+                        };
                         return {
                             ok: true,
-                            json: async () => ({
-                                candidates: [{
-                                    content: {
-                                        parts: [{
-                                            text: JSON.stringify({ "1": "A", "2": "explore" })
-                                        }]
-                                    }
-                                }]
-                            })
+                            status: 200,
+                            json: async () => mockPayload,
+                            text: async () => JSON.stringify(mockPayload)
                         };
                     }
                     return origFetch(url, opts);

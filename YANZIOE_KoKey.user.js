@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YANZIOE VIP (CoKey) - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.1.5
+// @version      1.1.6
 // @description  Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM) - Bản VIP Glassmorphism không cần nhập API Key
 // @author       YanzBn
 // @match        *://ioe.vn/*
@@ -91,12 +91,81 @@
             .replace(/'/g, '&#039;');
     }
 
+    async function requestExternal(url, options = {}) {
+        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;
+
+        // Channel 1: Extension MV3 Background Bridge (zero CSP restrictions)
+        if (document.documentElement?.dataset?.ioeBridge === '1') {
+            const bridgeRes = await new Promise((resolve) => {
+                const id = 'ioeb_' + Math.random().toString(36).slice(2) + Date.now();
+                const timer = setTimeout(() => {
+                    window.removeEventListener('message', onMsg);
+                    resolve(null);
+                }, timeoutMs);
+                function onMsg(ev) {
+                    if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_RES' || ev.data?.id !== id) return;
+                    clearTimeout(timer);
+                    window.removeEventListener('message', onMsg);
+                    resolve(ev.data.payload);
+                }
+                window.addEventListener('message', onMsg);
+                window.postMessage({
+                    type: 'IOE_BRIDGE_FETCH_REQ',
+                    id,
+                    payload: { url, method, headers, body, responseType }
+                }, '*');
+            });
+            if (bridgeRes) {
+                if (bridgeRes.error) throw new Error(bridgeRes.error);
+                return bridgeRes;
+            }
+        }
+
+        // Channel 2: Tampermonkey GM_xmlhttpRequest (zero CSP/CORS restrictions)
+        const gmXhr = typeof global.GM_xmlhttpRequest === 'function'
+            ? global.GM_xmlhttpRequest
+            : (typeof win.GM_xmlhttpRequest === 'function' ? win.GM_xmlhttpRequest : null);
+        if (gmXhr) {
+            return await new Promise((resolve) => {
+                gmXhr({
+                    method,
+                    url,
+                    headers,
+                    data: body,
+                    timeout: timeoutMs,
+                    responseType: responseType === 'base64' ? 'arraybuffer' : 'text',
+                    onload(r) {
+                        resolve({ ok: r.status >= 200 && r.status < 300, status: r.status, text: r.responseText || '' });
+                    },
+                    onerror(e) { resolve({ ok: false, status: 0, error: e?.statusText || 'GM_xhr error' }); },
+                    ontimeout() { resolve({ ok: false, status: 0, error: 'GM_xhr timeout' }); }
+                });
+            });
+        }
+
+        // Channel 3: Native fetch fallback
+        const ctrl = new AbortController();
+        const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+            const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
+            let text = '';
+            if (typeof r.text === 'function') text = await r.text();
+            else if (typeof r.json === 'function') text = JSON.stringify(await r.json());
+            return { ok: r.ok, status: r.status, text };
+        } catch (err) {
+            return { ok: false, status: 0, error: err?.message || String(err) };
+        } finally {
+            clearTimeout(tm);
+        }
+    }
+
     const ioeState = {
         events,
         toast,
         delay,
         escHtml,
         onBodyReady,
+        net: { requestExternal },
         state: {
             isSolving: false,
             currentQuestionId: null,
@@ -282,24 +351,47 @@
 
     /* ================= 4. TIER 2: AI SOLVER (GEMINI / GROQ / OPENROUTER) ================= */
     async function callGeminiApi(apiKey, prompt) {
-        const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-exp'];
+        const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'];
+        const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);
+
         for (const m of models) {
             try {
                 const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { temperature: 0.1, maxOutputTokens: 1000 }
-                    })
-                });
-                if (res.ok) {
-                    const j = await res.json();
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        temperature: 0.1,
+                        maxOutputTokens: 1000,
+                        responseMimeType: 'application/json'
+                    }
+                };
+
+                let resText = null;
+                if (reqExt) {
+                    const r = await reqExt(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                        timeoutMs: 12000
+                    });
+                    if (r && r.ok && r.text) resText = r.text;
+                } else {
+                    const r = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (r.ok) resText = await r.text();
+                }
+
+                if (resText) {
+                    const j = JSON.parse(resText);
                     const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;
                     if (txt) return txt;
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.warn(`[YANZIOE Gemini Error on ${m}]`, e);
+            }
         }
         return null;
     }
@@ -336,27 +428,49 @@ Question: ${qText}${optsText}`;
                     ? 'https://api.groq.com/openai/v1/chat/completions'
                     : 'https://openrouter.ai/api/v1/chat/completions';
                 const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';
+                const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);
 
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model,
-                        messages: [{ role: 'user', content: prompt }],
-                        temperature: 0.1
-                    })
+                const reqBody = JSON.stringify({
+                    model,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.1,
+                    response_format: { type: 'json_object' }
                 });
-                const j = await res.json();
-                const raw = j?.choices?.[0]?.message?.content || '';
-                const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
-                if (m) {
-                    const parsed = JSON.parse(m[0]);
-                    return parsed.answer;
+
+                let resText = null;
+                if (reqExt) {
+                    const r = await reqExt(endpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: reqBody,
+                        timeoutMs: 12000
+                    });
+                    if (r && r.ok && r.text) resText = r.text;
+                } else {
+                    const res = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: reqBody
+                    });
+                    if (res.ok) resText = await res.text();
                 }
-                return raw.replace(/["'{}]/g, '').trim();
+
+                if (resText) {
+                    const j = JSON.parse(resText);
+                    const raw = j?.choices?.[0]?.message?.content || '';
+                    const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
+                    if (m) {
+                        const parsed = JSON.parse(m[0]);
+                        return parsed.answer;
+                    }
+                    return raw.replace(/["'{}]/g, '').trim();
+                }
             }
         } catch (err) {
             return null;
@@ -484,22 +598,44 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                     ? 'https://api.groq.com/openai/v1/chat/completions'
                     : 'https://openrouter.ai/api/v1/chat/completions';
                 const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';
+                const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);
 
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model,
-                        messages: [{ role: 'user', content: prompt }],
-                        temperature: 0.1
-                    })
+                const reqBody = JSON.stringify({
+                    model,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.1,
+                    response_format: { type: 'json_object' }
                 });
-                if (res.ok) {
-                    const j = await res.json();
-                    raw = j?.choices?.[0]?.message?.content || '';
+
+                if (reqExt) {
+                    const r = await reqExt(endpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: reqBody,
+                        timeoutMs: 12000
+                    });
+                    if (r && r.ok && r.text) {
+                        try {
+                            const j = JSON.parse(r.text);
+                            raw = j?.choices?.[0]?.message?.content || '';
+                        } catch (e) {}
+                    }
+                } else {
+                    const res = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: reqBody
+                    });
+                    if (res.ok) {
+                        const j = await res.json();
+                        raw = j?.choices?.[0]?.message?.content || '';
+                    }
                 }
             }
 
@@ -2217,7 +2353,7 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.5</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.6</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
