@@ -1,4 +1,4 @@
-# 🚀 YANZIOE VIP v1.0.1 — IOE.vn Auto Answer & Revealer
+# 🚀 YANZIOE VIP v1.2.9 — IOE.vn Auto Answer & Revealer
 
 > Tool hỗ trợ học tập và hiển thị gợi ý đáp án Olympic Tiếng Anh trên Internet (IOE.vn), tích hợp bộ phân tích **Adobe Animate / CreateJS HTML5 Canvas**, Local English CAS 0ms, AI Vision/Text Solver (Groq / Gemini / OpenRouter), HUD nổi Dark Glassmorphism và chế độ Auto-Answer thông minh.
 
