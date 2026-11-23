@@ -477,6 +477,15 @@
                 inlineParts.push({ inlineData: { mimeType: img.contentType || 'image/jpeg', data: img.base64 } });
             }
         }
+        if (Array.isArray(mediaOpts?.optionImageUrls) && mediaOpts.optionImageUrls.length > 0 && provider === 'gemini') {
+            const optImgs = await Promise.all(mediaOpts.optionImageUrls.slice(0, 4).map(u => fetchMediaBase64(u)));
+            optImgs.forEach((img, idx) => {
+                if (img?.base64) {
+                    inlineParts.push({ inlineData: { mimeType: img.contentType || 'image/jpeg', data: img.base64 } });
+                    audioTranscriptNote += `\n[Option ${idx + 1} (${cleanOpts[idx] || idx + 1}) image attached]`;
+                }
+            });
+        }
 
         const isTrueFalse = cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o));
         let instruction = '';

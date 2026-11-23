@@ -1,4 +1,4 @@
-/* YANZIOE VIP v1.2.6 */
+/* YANZIOE VIP v1.2.7 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     if (_w.__YANZIOE_BOOTED__) return;
@@ -224,7 +224,7 @@
     }
 
     const ioeState = {
-        version: '1.2.6',
+        version: '1.2.7',
         events,
         toast,
         delay,
@@ -1399,6 +1399,15 @@
                 inlineParts.push({ inlineData: { mimeType: img.contentType || 'image/jpeg', data: img.base64 } });
             }
         }
+        if (Array.isArray(mediaOpts?.optionImageUrls) && mediaOpts.optionImageUrls.length > 0 && provider === 'gemini') {
+            const optImgs = await Promise.all(mediaOpts.optionImageUrls.slice(0, 4).map(u => fetchMediaBase64(u)));
+            optImgs.forEach((img, idx) => {
+                if (img?.base64) {
+                    inlineParts.push({ inlineData: { mimeType: img.contentType || 'image/jpeg', data: img.base64 } });
+                    audioTranscriptNote += `\n[Option ${idx + 1} (${cleanOpts[idx] || idx + 1}) image attached]`;
+                }
+            });
+        }
 
         const isTrueFalse = cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o));
         let instruction = '';
@@ -2146,6 +2155,20 @@
         return canTraverseNode(node) && isSelfOpaque(node);
     }
 
+    function findComp(node, ccClass, typeName) {
+        if (!node) return null;
+        if (typeof node.getComponent === 'function') {
+            const c = (ccClass && node.getComponent(ccClass)) || node.getComponent(typeName);
+            if (c) return c;
+        }
+        if (Array.isArray(node._components)) {
+            for (const c of node._components) {
+                if (c && ((ccClass && c instanceof ccClass) || c.__classname__ === typeName)) return c;
+            }
+        }
+        return null;
+    }
+
     function getNodeText(node) {
         if (!node) return '';
         try {
@@ -2203,6 +2226,8 @@
         if (!node || curDepth > maxDepth || !canTraverseNode(node)) return [];
         const results = [];
         try {
+            const cc = win.cc;
+            const hasRichText = !!findComp(node, cc?.RichText, 'cc.RichText');
             if (isSelfOpaque(node)) {
                 const clean = getNodeText(node);
                 if (clean.length > 0) {
@@ -2210,9 +2235,12 @@
                     results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
                 }
             }
-            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
-            for (const child of children) {
-                results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));
+            if (!hasRichText) {
+                const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+                for (const child of children) {
+                    if (child?.name === 'RICHTEXT_CHILD') continue;
+                    results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));
+                }
             }
         } catch (e) {}
         return results;
@@ -2263,18 +2291,25 @@
             let isClickable = false;
             let btnComp = null;
 
-            if (typeof node.getComponent === 'function') {
-                btnComp = (cc?.Button && node.getComponent(cc.Button)) || node.getComponent('cc.Button') || null;
-                if (btnComp && btnComp.interactable !== false && btnComp.enabled !== false) isClickable = true;
-            }
-            if (cc?.MenuItem && node instanceof cc.MenuItem && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
-            if (cc?.ui?.Button && node instanceof cc.ui.Button && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
-            if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;
-            if (node._hasClickEventListener || node._touchListener || node._touchEnabled || hasEventListeners(node)) isClickable = true;
+            const isNonButtonWidget = !!(
+                findComp(node, cc?.ScrollView, 'cc.ScrollView') ||
+                findComp(node, cc?.Scrollbar, 'cc.Scrollbar') ||
+                findComp(node, cc?.RichText, 'cc.RichText') ||
+                findComp(node, cc?.Mask, 'cc.Mask')
+            );
 
-            const name = (node.name || '').toLowerCase();
-            if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('word')) {
-                isClickable = true;
+            if (!isNonButtonWidget) {
+                btnComp = findComp(node, cc?.Button, 'cc.Button') || findComp(node, cc?.Toggle, 'cc.Toggle') || null;
+                if (btnComp && btnComp.interactable !== false && btnComp.enabled !== false) isClickable = true;
+                if (cc?.MenuItem && node instanceof cc.MenuItem && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
+                if (cc?.ui?.Button && node instanceof cc.ui.Button && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
+                if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;
+                if (node._hasClickEventListener || node._touchListener || node._touchEnabled || hasEventListeners(node)) isClickable = true;
+
+                const name = (node.name || '').toLowerCase();
+                if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('word') || name.includes('apple')) {
+                    isClickable = true;
+                }
             }
 
             if (isClickable) {
@@ -2288,9 +2323,13 @@
                 }
             }
 
-            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
-            for (const child of children) {
-                results.push(...findCocosClickables(child, maxDepth, curDepth + 1));
+            const hasRichText = !!findComp(node, cc?.RichText, 'cc.RichText');
+            if (!hasRichText) {
+                const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+                for (const child of children) {
+                    if (child?.name === 'RICHTEXT_CHILD') continue;
+                    results.push(...findCocosClickables(child, maxDepth, curDepth + 1));
+                }
             }
         } catch (e) {}
         return results;
@@ -2325,8 +2364,30 @@
 
             let firedClickEvents = false;
             let btnComp = null;
-            if (typeof node.getComponent === 'function') {
-                btnComp = (cc?.Button && node.getComponent(cc.Button)) || node.getComponent('cc.Button') || null;
+            const toggleComp = findComp(node, cc?.Toggle, 'cc.Toggle');
+            if (toggleComp && toggleComp.interactable !== false) {
+                btnComp = toggleComp;
+                toggleComp.isChecked = true;
+                const tEvs = (Array.isArray(toggleComp.checkEvents) && toggleComp.checkEvents.length > 0)
+                    ? toggleComp.checkEvents
+                    : (Array.isArray(toggleComp.clickEvents) ? toggleComp.clickEvents : []);
+                if (tEvs.length > 0) {
+                    if (typeof cc?.Component?.EventHandler?.emitEvents === 'function') {
+                        try { cc.Component.EventHandler.emitEvents(tEvs, mockEvent); firedClickEvents = true; } catch (e) {}
+                    } else {
+                        for (const ev of tEvs) {
+                            if (typeof ev?.emit === 'function') { try { ev.emit([mockEvent, ev.customEventData]); firedClickEvents = true; } catch (e) {} }
+                        }
+                    }
+                }
+                if (!firedClickEvents && typeof toggleComp.check === 'function') {
+                    try { toggleComp.check(); firedClickEvents = true; } catch (e) {}
+                }
+                if (typeof node.emit === 'function') node.emit('toggle', toggleComp);
+            }
+
+            if (!btnComp) {
+                btnComp = findComp(node, cc?.Button, 'cc.Button');
                 if (btnComp && btnComp.interactable !== false) {
                     btnComp._pressed = true;
                     if (Array.isArray(btnComp.clickEvents) && btnComp.clickEvents.length > 0) {
@@ -2434,13 +2495,33 @@
         if (allTexts.length === 0) return false;
 
         const { width: W, height: H } = getLogicalCanvasSize();
+        const { clozeComp } = inspectIoeGameComponents(scene);
 
-        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}/i.test(t.text)));
+        let passageObj = clozeComp?.txtQuestion
+            ? { text: getNodeText(clozeComp.txtQuestion.node || clozeComp.txtQuestion) || String(clozeComp.questData || '') }
+            : allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}/i.test(t.text)));
         if (!passageObj) passageObj = allTexts.find(t => t.text.length > 85 && t.worldY > H * 0.42);
         if (!passageObj || !passageObj.text) return false;
         const passageText = passageObj.text;
 
         function extractRowsFromScene() {
+            if (clozeComp?.contentAnswer?.children?.length) {
+                const cRows = [];
+                clozeComp.contentAnswer.children.forEach((rowNode, idx) => {
+                    if (!canTraverseNode(rowNode)) return;
+                    const cont = (typeof rowNode.getChildByName === 'function' ? rowNode.getChildByName('container') : null) ||
+                        (rowNode.children || []).find(ch => /container/i.test(ch.name || '')) || rowNode;
+                    const optNodes = (cont.children || []).filter(canTraverseNode);
+                    const btns = optNodes.map(n => {
+                        const ansTxt = String(n.dataAnswer?.answer || getNodeText(n) || extractCocosTexts(n, 3).map(t => t.text).join(' ')).trim();
+                        return { node: n, text: ansTxt, name: n.name || '', worldX: n.x || 0, worldY: n.y || 0 };
+                    }).filter(b => b.text);
+                    const rowIdx = optNodes[0]?.dataAnswer?.questIdx || (idx + 1);
+                    if (btns.length >= 2) cRows.push({ rowNumber: rowIdx, buttons: btns, y: 0 });
+                });
+                if (cRows.length > 0) return cRows.sort((a, b) => a.rowNumber - b.rowNumber);
+            }
+
             const curTexts = extractCocosTexts(scene);
             const clickables = findCocosClickables(scene);
             const candBtns = [];
@@ -2482,7 +2563,7 @@
         }
 
         const initialRowsRaw = extractRowsFromScene();
-        if (initialRowsRaw.length === 0 && !/\(\s*\d+\s*\)/.test(passageText)) return false;
+        if (!clozeComp && initialRowsRaw.length < 2 && !/\(\s*\d+\s*\)|_{3,}/.test(passageText)) return false;
 
         const initialRows = initialRowsRaw.map(r => ({
             index: r.rowNumber,
@@ -2660,6 +2741,7 @@
         let gamePlayComp = null;
         let reorderComp = null;
         let matchComp = null;
+        let clozeComp = null;
         let textComp = null;
         const seen = new WeakSet();
         (function walk(n, d = 0) {
@@ -2670,12 +2752,13 @@
                 if (!gamePlayComp && (c.btnSubmit || c.quest || typeof c.findQuestModel === 'function')) gamePlayComp = c;
                 if (!reorderComp && Array.isArray(c.listText) && Array.isArray(c.listAnswer)) reorderComp = c;
                 if (!matchComp && c.ctnCross && (c.rootGame || c.data?.game?.question)) matchComp = c;
+                if (!clozeComp && c.contentAnswer && c.txtQuestion) clozeComp = c;
                 if (!textComp && c.questionModel && Array.isArray(c.buttons) && c.node?.activeInHierarchy !== false) textComp = c;
             }
             const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
             for (const x of ch) walk(x, d + 1);
         })(scene, 0);
-        return { gamePlayComp, reorderComp, matchComp, textComp };
+        return { gamePlayComp, reorderComp, matchComp, clozeComp, textComp };
     }
 
     async function solveCocosMatchingPairs(scene) {
@@ -2809,7 +2892,8 @@
         if (!scene) return false;
         try {
             const { width: W, height: H } = getLogicalCanvasSize();
-            const { gamePlayComp, reorderComp } = inspectIoeGameComponents(scene);
+            const { gamePlayComp, reorderComp, matchComp, clozeComp, textComp } = inspectIoeGameComponents(scene);
+            if (!reorderComp && (matchComp || clozeComp || textComp)) return false;
             if (reorderComp && reorderComp._enableClick === false) return false;
 
             const clickables = findCocosClickables(scene);
@@ -2826,19 +2910,24 @@
                     }
                 }
             } else {
+                const sceneHasLongPassage = extractCocosTexts(scene).some(x => x.text.length > 90);
+                if (sceneHasLongPassage) return false;
+                const lowerClickTexts = clickables.map(c => (c.text || '').trim().toLowerCase());
+                if (lowerClickTexts.includes('true') && lowerClickTexts.includes('false')) return false;
+
                 for (const c of clickables) {
                     const nl = (c.name || '').toLowerCase();
                     const t = (c.text || '').trim();
                     const tl = t.toLowerCase();
                     if (c.worldX > W * 0.72 && c.worldY > H * 0.65) continue;
-                    if (nl.includes('submit') || nl.includes('answer') || nl.includes('traloi') || tl === 'answer' || tl === 'trả lời' || tl === 'nộp bài') {
+                    if (nl.includes('submit') || nl.includes('answer') || nl.includes('traloi') || tl === 'answer' || tl === 'trả lời' || tl === 'nộp bài' || tl === 'submit') {
                         if (!answerBtn) answerBtn = c;
                         continue;
                     }
-                    if (!t) continue;
+                    if (!t || /^\d{1,2}$/.test(t) || /^\d+\s+\d+$/.test(t)) continue;
                     if (isAncestorNamed(c.node, /ctnAnwser|ctnAnswer|profile|header/i)) continue;
                     if (typeof c.node?.opacity === 'number' && c.node.opacity <= 8) continue;
-                    if (t.length > 0 && t.length < 48 && !isHudChromeText(t) && !/^(ok|start|close|back|reset|sound|skip|replay|score|round:.*)$/i.test(tl) && !/^[A-D][.:)]/i.test(t)) {
+                    if (t.length > 0 && t.length < 48 && !isHudChromeText(t) && !/^(ok|start|close|back|reset|sound|skip|replay|score|round:.*|true|false)$/i.test(tl) && !/^[A-D][.:)]/i.test(t)) {
                         wordBlocks.push(c);
                     }
                 }
@@ -3062,20 +3151,40 @@
             // 2. Word Reordering ("Bạch tuộc thu ngọc")
             if (await solveCocosWordReordering(cocosScene)) return true;
 
-            // 3. Multiple Choice / Fill-in-the-blank (separate prompt stem vs option buttons + image clues)
+            // 3. Multiple Choice / True-False / Reading Comprehension / Fill-in-the-blank
             const { width: W, height: H } = getLogicalCanvasSize();
             const { gamePlayComp, textComp } = inspectIoeGameComponents(cocosScene);
             if (textComp && textComp.canClick === false) return false;
 
             const cocosTexts = extractCocosTexts(cocosScene);
             if (cocosTexts.length > 0 || textComp) {
-                let optBtns = clickables.filter(c => {
-                    if (c.worldX > W * 0.72 && c.worldY > H * 0.65) return false;
+                const tabBtns = [];
+                let separateSubmitNode = gamePlayComp?.btnSubmit?.node || gamePlayComp?.btnSubmit || null;
+                let optBtns = [];
+
+                for (const c of clickables) {
+                    if (c.worldX > W * 0.72 && c.worldY > H * 0.65) continue;
                     const t = (c.text || '').trim();
                     const nl = (c.name || '').toLowerCase();
-                    return t && !isHudChromeText(t) && !/(submit|next|skip|close|sound|back|reset|hint)/.test(nl) &&
-                        !/^(nộp bài|trả lời|tiếp tục|bỏ qua|nghe lại|submit|next|ok|start|answer|score)$/i.test(t);
-                });
+                    if (!t) continue;
+                    if (/^\d{1,2}$/.test(t) && c.worldY > H * 0.60) {
+                        const num = parseInt(t, 10);
+                        if (num >= 1 && num <= 20 && !tabBtns.some(x => x.num === num)) {
+                            tabBtns.push({ num, node: c.node, worldX: c.worldX });
+                        }
+                        continue;
+                    }
+                    if (/^(nộp bài|trả lời|xác nhận|submit|answer)$/i.test(t) || /(submit|btnanswer)/.test(nl)) {
+                        if (!separateSubmitNode) separateSubmitNode = c.node;
+                        continue;
+                    }
+                    if (isHudChromeText(t) || /^\d+\s+\d+$/.test(t) || /(next|skip|close|sound|back|reset|hint|scroll)/.test(nl)) continue;
+                    if (/^(tiếp tục|bỏ qua|nghe lại|next|ok|start|score|\d+(\.\d+)?)$/i.test(t)) continue;
+                    optBtns.push(c);
+                }
+                tabBtns.sort((a, b) => a.num - b.num);
+
+                let optionImageUrls = [];
                 if (textComp?.buttons?.length) {
                     const activeBtns = textComp.buttons.filter(b => b?.node && canTraverseNode(b.node) && b.btnIdx !== 6);
                     const isTfButtons = activeBtns.filter(b => (b.btnIdx === 0 || b.btnIdx === 1) && !(b.btnTxt || b.btnContent || getNodeText(b.node))).length === 2;
@@ -3083,7 +3192,10 @@
                         .map(b => {
                             let txt = String(b.btnTxt || b.btnContent || getNodeText(b.node) || '').replace(/<[^>]+>/g, '').trim();
                             if (!txt && isTfButtons) txt = b.btnIdx === 1 ? 'True' : (b.btnIdx === 0 ? 'False' : '');
-                            else if (!txt && b.btnUrl) txt = `[Image: ${String(b.btnUrl).split('/').pop()}]`;
+                            else if (!txt && b.btnUrl) {
+                                optionImageUrls.push(String(b.btnUrl));
+                                txt = `[Image: ${String(b.btnUrl).split('/').pop()}]`;
+                            }
                             return { node: b.node, text: txt, btnComp: b, name: b.node.name || '' };
                         })
                         .filter(b => b.text);
@@ -3091,10 +3203,15 @@
                 }
 
                 const optSet = new Set(optBtns.map(b => b.text.trim()));
-                const stemTexts = cocosTexts
-                    .filter(x => !(x.worldX > W * 0.72 && x.worldY > H * 0.65))
-                    .map(x => x.text.trim())
-                    .filter(t => !isHudChromeText(t) && !optSet.has(t) && !/^(id:|round:|score|\d+(\.\d+)?)$/i.test(t));
+                const tabNumSet = new Set(tabBtns.map(t => String(t.num)));
+                const stemTexts = [];
+                for (const x of cocosTexts) {
+                    if (x.worldX > W * 0.72 && x.worldY > H * 0.65) continue;
+                    const t = x.text.trim();
+                    if (!t || isHudChromeText(t) || optSet.has(t) || tabNumSet.has(t)) continue;
+                    if (/^(id:|round:|score|submit|answer|\d+\s+\d+|\d+(\.\d+)?)$/i.test(t)) continue;
+                    if (!stemTexts.includes(t)) stemTexts.push(t);
+                }
 
                 const qModel = textComp?.questionModel;
                 const descPart = qModel?.questionDescription;
@@ -3105,8 +3222,11 @@
                     (contPart && !contPart.hasAudio && !contPart.hasImage && !isUrlStr(contPart.content)) ? contPart.content : ''
                 ].filter(Boolean).join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
+                const longPassages = stemTexts.filter(t => t.length >= 60 && (!modelText || !modelText.includes(t)));
                 const spriteClues = extractSceneSpriteClues(cocosScene);
-                let qPrompt = modelText || stemTexts.join(' ').trim() || cocosTexts.map(x => x.text).join(' ').trim();
+                let qPrompt = modelText
+                    ? (longPassages.length ? `[Passage]: ${longPassages.join(' ')}\nQuestion: ${modelText}` : modelText)
+                    : (stemTexts.join('\n').trim() || cocosTexts.map(x => x.text).join(' ').trim());
                 if (spriteClues.length > 0) {
                     qPrompt += ` [Image hints: ${spriteClues.slice(0, 5).join(', ')}]`;
                 }
@@ -3116,18 +3236,18 @@
                 const maxInput = Number(contPart?.maxInput || 0);
 
                 const qId = qModel?.questionId ?? null;
-                const qKey = String(qId || qPrompt.slice(0, 60));
+                const qKey = String(qId || `${qPrompt.slice(0, 96)}#${qPrompt.slice(-64)}:${qPrompt.length}`);
                 if (IOE.state.currentQuestKey !== qKey) {
                     IOE.state.currentQuestKey = qKey;
                     IOE.state.questStartedAt = Date.now();
                 }
                 const optStrings = optBtns.map(b => b.text);
-                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings, maxInput > 0 ? 'blank' : '', { audioUrl, imageUrl, maxInput });
+                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings, maxInput > 0 ? 'blank' : '', { audioUrl, imageUrl, optionImageUrls, maxInput });
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
                     if (IOE.pacing?.isHumanPacingActive?.()) {
-                        await IOE.pacing.waitQuestionReadTime(2800, !!audioUrl);
-                        const totalQ = Number(IOE.state?.totalExamQuestions || 10);
+                        await IOE.pacing.waitQuestionReadTime(longPassages.length ? 3400 : 2800, !!audioUrl);
+                        const totalQ = Number(tabBtns.length || IOE.state?.totalExamQuestions || 10);
                         const curNum = Number(textComp?.currentQuestionNumber || (typeof gamePlayComp?.currentQuestIdx === 'number' ? gamePlayComp.currentQuestIdx + 1 : 0));
                         if (curNum > 0 && curNum >= totalQ && IOE.pacing?.waitUntilMinElapsed) {
                             await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalQ), audioUrl ? 'nghe kỹ bài cuối' : 'đọc kỹ câu cuối');
@@ -3189,12 +3309,44 @@
                         }
                     }
 
-                    // b. Click matched multiple-choice button cleanly
+                    // b. Click matched multiple-choice / True-False button cleanly (+ tab advance or separate Submit)
                     if (optBtns.length > 0) {
                         const matchedBtn = matchCocosButton(optBtns, ansStr);
                         if (matchedBtn) {
                             await clickCocosNode(matchedBtn.node);
                             IOE.toast(`⚡ [Cocos2d] Chọn: ${matchedBtn.text || ansStr}`, 1400);
+
+                            const hasSeparateSubmit = separateSubmitNode && separateSubmitNode !== matchedBtn.node && !textComp;
+                            if (tabBtns.length >= 2) {
+                                if (!IOE.state._visitedTabs) IOE.state._visitedTabs = new Set();
+                                IOE.state._visitedTabs.add(qKey);
+                                await IOE.delay?.(320);
+                                const getStemSig = () => extractCocosTexts(cocosScene)
+                                    .filter(x => !(x.worldX > W * 0.72 && x.worldY > H * 0.65))
+                                    .map(x => x.text.trim())
+                                    .filter(t => t && !isHudChromeText(t) && !optSet.has(t) && !tabNumSet.has(t) && !/^(id:|round:|score|submit|answer|\d+:\d+|\d+\s+\d+|\d+(\.\d+)?)$/i.test(t))
+                                    .join('|');
+                                const prevStemSig = stemTexts.filter(t => !/^\d+:\d+$/.test(t)).join('|');
+                                if (getStemSig() === prevStemSig) {
+                                    const nextTab = tabBtns.find((_, idx) => idx >= IOE.state._visitedTabs.size);
+                                    if (nextTab) {
+                                        await clickCocosNode(nextTab.node);
+                                        await IOE.delay?.(260);
+                                        if (getStemSig() === prevStemSig && hasSeparateSubmit) {
+                                            await clickCocosNode(separateSubmitNode);
+                                        }
+                                    } else if (hasSeparateSubmit) {
+                                        if (IOE.pacing?.isHumanPacingActive?.() && IOE.pacing?.waitUntilMinElapsed) {
+                                            await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(tabBtns.length), 'nộp bài Đọc hiểu');
+                                        }
+                                        await clickCocosNode(separateSubmitNode);
+                                        IOE.state._visitedTabs.clear();
+                                    }
+                                }
+                            } else if (hasSeparateSubmit) {
+                                await IOE.delay?.(320);
+                                await clickCocosNode(separateSubmitNode);
+                            }
                             return true;
                         }
                     }

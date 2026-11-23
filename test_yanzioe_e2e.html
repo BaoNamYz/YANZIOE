@@ -768,8 +768,175 @@
                 log('33. Captures startgame timeAuto/examStartedAt & enforces anti-speed-flag Human Pacing floor',
                     pacingSrv === 40 && pacingFloor === 34 && pacingActiveForce && window.IOE.state.totalExamQuestions === 1);
 
+                // Test 34: Apple Basket Reading Comprehension (cc.RichText dedup, non-clickable ScrollView, non-reorder, True/False + Apple Tab advance)
+                function Btn34(evs) { this.interactable = true; this.clickEvents = evs || []; }
+                function Rt34(str) { this.string = str; }
+                function Sv34() {}
+                function Lbl34(str) { this.string = str; }
+                let picked34 = '', clickedTab34 = '', promptSent34 = '';
+                const apple1Node = {
+                    name: 'apple_1', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    children: [{ name: 'lbl', active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [new Lbl34('1')], children: [] }],
+                    convertToWorldSpaceAR: () => ({ x: 410, y: 860 }),
+                    getComponent: (t) => (t === Btn34 ? apple1Btn : (t === Lbl34 ? apple1Lbl : null))
+                };
+                const apple1Lbl = new Lbl34('1');
+                const apple1Btn = new Btn34([{ emit() { clickedTab34 = '1'; } }]);
+                apple1Node._components = [apple1Btn];
+                const apple2Node = {
+                    name: 'apple_2', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    children: [{ name: 'lbl', active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [new Lbl34('2')], children: [] }],
+                    convertToWorldSpaceAR: () => ({ x: 490, y: 860 }),
+                    getComponent: (t) => (t === Btn34 ? apple2Btn : null)
+                };
+                const apple2Btn = new Btn34([{ emit() { clickedTab34 = '2'; qRichComp.string = 'Question 2 on beach'; qFragLabels[0].string = 'Question 2'; qFragLabels.slice(1).forEach(l => l.string = ''); } }]);
+                apple2Node._components = [apple2Btn];
+                const passageSvNode = {
+                    name: 'ScrollViewPassage', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    _bubblingListeners: { touchstart: {} },
+                    _components: [new Sv34()],
+                    children: [{
+                        name: 'passageLbl', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        _components: [new Lbl34('In the 19th century, railways were built from Leeds and Manchester so working people could visit seaside towns.')],
+                        children: [], convertToWorldSpaceAR: () => ({ x: 300, y: 360 })
+                    }],
+                    convertToWorldSpaceAR: () => ({ x: 300, y: 360 })
+                };
+                const qFragLabels = [
+                    new Lbl34('In the 19th century, new railways made it'),
+                    new Lbl34('possible for working'),
+                    new Lbl34('people to go to the'),
+                    new Lbl34('coast.')
+                ];
+                const qRichComp = new Rt34('In the 19th century, new railways made it possible for working people to go to the coast.');
+                const qRichNode = {
+                    name: 'QuestRichText', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    _bubblingListeners: { touchstart: {} },
+                    _components: [qRichComp],
+                    children: qFragLabels.map(lbl => ({
+                        name: 'RICHTEXT_CHILD', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        _components: [lbl], children: [], convertToWorldSpaceAR: () => ({ x: 760, y: 400 })
+                    })),
+                    convertToWorldSpaceAR: () => ({ x: 760, y: 400 })
+                };
+                const tfTrueBtn = new Btn34([{ emit() { picked34 = 'True'; } }]);
+                const tfTrueNode = {
+                    name: 'btnTrue', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    _components: [tfTrueBtn],
+                    children: [{ name: 'l', active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [new Lbl34('True')], children: [] }],
+                    convertToWorldSpaceAR: () => ({ x: 720, y: 210 })
+                };
+                const tfFalseBtn = new Btn34([{ emit() { picked34 = 'False'; } }]);
+                const tfFalseNode = {
+                    name: 'btnFalse', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    _components: [tfFalseBtn],
+                    children: [{ name: 'l', active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [new Lbl34('False')], children: [] }],
+                    convertToWorldSpaceAR: () => ({ x: 860, y: 210 })
+                };
+                const sub34Btn = new Btn34([{ emit() {} }]);
+                const sub34Node = {
+                    name: 'btnSubmit', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    _components: [sub34Btn],
+                    children: [{ name: 'l', active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [new Lbl34('Submit')], children: [] }],
+                    convertToWorldSpaceAR: () => ({ x: 800, y: 120 })
+                };
+                const appleScene = {
+                    active: true, activeInHierarchy: true,
+                    children: [apple1Node, apple2Node, passageSvNode, qRichNode, tfTrueNode, tfFalseNode, sub34Node]
+                };
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: Btn34, Label: Lbl34, RichText: Rt34, ScrollView: Sv34,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e]); } } },
+                    director: { getRunningScene: () => appleScene }
+                };
+                const ext34Texts = window.IOE.canvas.extractCocosTexts(appleScene).map(x => x.text);
+                const richMerged34 = ext34Texts.includes('In the 19th century, new railways made it possible for working people to go to the coast.') &&
+                    !ext34Texts.includes('possible for working');
+                const reorderRejected34 = await window.IOE.canvas.solveCocosWordReordering(appleScene);
+                const prevKey34 = window.IOE.featureConfigs.apiKey;
+                const prevFetch34 = window.fetch;
+                window.IOE.featureConfigs.apiKey = 'gsk_test_apple_34';
+                window.IOE.state._visitedTabs = new Set();
+                window.fetch = async (url, opts) => {
+                    if (String(url).includes('/openai/v1/models')) return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ id: 'llama-3.3-70b-versatile' }] }) };
+                    const body = JSON.parse(opts?.body || '{}');
+                    promptSent34 = body?.messages?.[0]?.content || '';
+                    return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: '{"answer":"True"}' } }] }) };
+                };
+                const appleOk34 = await window.IOE.canvas.solveCanvasGame();
+                window.fetch = prevFetch34;
+                window.IOE.featureConfigs.apiKey = prevKey34;
+                delete window.cc;
+                log('34. Apple Basket Reading merges cc.RichText, ignores ScrollView click, skips reorder, answers True & opens Apple 2',
+                    richMerged34 && reorderRejected34 === false && appleOk34 === true && picked34 === 'True' && clickedTab34 === '2' && promptSent34.includes('railways were built'));
+
+                // Test 35: Live lau-dai-tren-may QuestDoanVanDienTu (cc.Toggle in contentAnswer) & Gemini optionImageUrls vision
+                function Toggle35(evs) { this.isChecked = false; this.checkEvents = evs || []; }
+                const checked35 = [];
+                function makeRow35(qIdx, a1, a2) {
+                    const mkOpt = (ans) => {
+                        let tog;
+                        const ev = { emit(args) { checked35.push(args?.[0]?.target?.dataAnswer?.answer || ''); } };
+                        tog = new Toggle35([ev]);
+                        const node = {
+                            name: 'opt_' + ans, active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                            dataAnswer: { questIdx: qIdx, answer: ans },
+                            _components: [tog], children: [],
+                            getComponent: (t) => (t === Toggle35 || t === 'cc.Toggle' ? tog : null)
+                        };
+                        tog.node = node;
+                        return node;
+                    };
+                    return {
+                        name: 'mcCross_' + qIdx, active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        children: [mkOpt(a1), mkOpt(a2)]
+                    };
+                }
+                const txtQ35 = { name: 'txtQuestion', active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [{ string: 'History (1) _______ back centuries. Today people (2) _______ its beauty.' }], children: [] };
+                const clozeComp35 = {
+                    txtQuestion: txtQ35,
+                    contentAnswer: { active: true, activeInHierarchy: true, visible: true, opacity: 255, children: [makeRow35(1, 'dates', 'went'), makeRow35(2, 'admire', 'sleep')] }
+                };
+                window.IOE.state._lastClozeSnippet = '';
+                window.IOE.state.clozeAnswers = { '1': 'dates', '2': 'admire' };
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Toggle: Toggle35,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e]); } } },
+                    director: { getRunningScene: () => ({ active: true, activeInHierarchy: true, children: [{ active: true, activeInHierarchy: true, _components: [clozeComp35], children: [txtQ35] }] }) }
+                };
+                const cloze35Ok = await window.IOE.canvas.solveCocosClozePassage(window.cc.director.getRunningScene());
+                delete window.cc;
+                window.IOE.state.clozeAnswers = {};
+
+                let geminiOptImgParts = 0;
+                const prevKey35 = window.IOE.featureConfigs.apiKey;
+                const prevFetch35 = window.fetch;
+                window.IOE.featureConfigs.apiKey = 'AIzaSyTestOptionImg35';
+                window.fetch = async (url, opts) => {
+                    const u = String(url);
+                    if (u.includes('cdn.ioe.vn/img/')) {
+                        return { ok: true, status: 200, headers: { get: () => 'image/jpeg' }, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
+                    }
+                    const payload = JSON.parse(opts?.body || '{}');
+                    geminiOptImgParts = (payload?.contents?.[0]?.parts || []).filter(p => p.inlineData).length;
+                    return { ok: true, status: 200, text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"answer":"[Image: cat.jpg]"}' }] } }] }) };
+                };
+                const optImgRes35 = await window.IOE.question.solveQuestion(
+                    'q_optimg_35',
+                    'Which animal is a cat?',
+                    ['[Image: cat.jpg]', '[Image: dog.jpg]'],
+                    '',
+                    { optionImageUrls: ['https://cdn.ioe.vn/img/cat.jpg', 'https://cdn.ioe.vn/img/dog.jpg'] }
+                );
+                window.fetch = prevFetch35;
+                window.IOE.featureConfigs.apiKey = prevKey35;
+                log('35. Live QuestDoanVanDienTu checks cc.Toggle blanks & Gemini vision attaches optionImageUrls',
+                    cloze35Ok === true && checked35.join(',') === 'dates,admire' && geminiOptImgParts === 2 && optImgRes35?.answer === '[Image: cat.jpg]');
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 35;
+                const allPassed = failCount === 0 && passCount >= 37;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

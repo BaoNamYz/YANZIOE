@@ -218,7 +218,7 @@
     }
 
     const ioeState = {
-        version: '1.2.6',
+        version: '1.2.7',
         events,
         toast,
         delay,
