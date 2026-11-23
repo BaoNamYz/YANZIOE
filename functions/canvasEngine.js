@@ -5,7 +5,7 @@
     if (!IOE) return;
 
     function isLicensed() {
-        return !!(IOE.state?.licensed || IOE.license?.isLicensed?.());
+        return !!IOE.license?.verifySeal?.('93e7d590b85d867a');
     }
 
     function stripOptPrefix(s) {

@@ -2,7 +2,15 @@
     'use strict';
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-    /* Capture pristine native timers before Freeze Timer or page scripts alter them */
+    /* Authorized host enforcement on live web origins (allows file:// local harness) */
+    if (typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || '') &&
+        !/(^|\.)(ioe\.vn|go\.vn|vtc\.vn|vtconline\.vn|goplay\.vn)$/i.test(location.hostname || '')) {
+        return;
+    }
+
+    /* Capture pristine native timers & fetch before page scripts alter them */
+    const isLiveOrigin = (typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || ''));
+    const nativeFetch = typeof win.fetch === 'function' ? win.fetch.bind(win) : null;
     const nativeSetInterval = win.setInterval.bind(win);
     const nativeClearInterval = win.clearInterval.bind(win);
     const nativeSetTimeout = win.setTimeout.bind(win);
@@ -138,7 +146,7 @@
                 fetchBody = fd;
                 delete cleanHeaders['Content-Type'];
             }
-            const r = await fetch(url, { method, headers: cleanHeaders, body: fetchBody, signal: ctrl.signal });
+            const r = await ((isLiveOrigin && nativeFetch) ? nativeFetch : fetch)(url, { method, headers: cleanHeaders, body: fetchBody, signal: ctrl.signal });
             if (responseType === 'base64' && typeof r.arrayBuffer === 'function') {
                 const buf = await r.arrayBuffer();
                 const bytes = new Uint8Array(buf);
@@ -217,8 +225,9 @@
         return waitMs;
     }
 
+    let _devHarnessLicensed = false;
     const ioeState = {
-        version: '1.2.8',
+        version: '1.2.9',
         events,
         toast,
         delay,
@@ -236,9 +245,8 @@
             setTimeout: nativeSetTimeout,
             clearTimeout: nativeClearTimeout
         },
-        net: { requestExternal },
+        net: { requestExternal, nativeFetch },
         state: {
-            licensed: false,
             isSolving: false,
             currentQuestionId: null,
             packetHits: 0,
@@ -280,6 +288,20 @@
         }
     };
 
+    Object.defineProperty(ioeState.state, 'licensed', {
+        enumerable: true,
+        configurable: false,
+        get() {
+            if (!isLiveOrigin && _devHarnessLicensed) return true;
+            return !!ioeState.license?.verifySeal?.('93e7d590b85d867a', true);
+        },
+        set(v) {
+            if (!isLiveOrigin) _devHarnessLicensed = !!v;
+        }
+    });
+
     global.IOE = ioeState;
-    win.IOE = ioeState;
+    if (!isLiveOrigin) {
+        win.IOE = ioeState;
+    }
 })(typeof window !== 'undefined' ? window : globalThis);

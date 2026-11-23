@@ -1,6 +1,8 @@
 import os
 import json
 import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -36,20 +38,41 @@ for rel in MODULES:
     else:
         print(f"[WARN] Missing module: {rel}")
 
-raw_bundle = "\n\n".join(bundled_parts)
+raw_bundle = "\n\n".join(bundled_parts).replace(
+    "})(typeof window !== 'undefined' ? window : globalThis);",
+    "})(__yanz_scope);"
+)
 bundle_code = f"""/* YANZIOE VIP v{VERSION} */
 (function() {{
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (_w.__YANZIOE_BOOTED__) return;
-    _w.__YANZIOE_BOOTED__ = true;
+    const _sym = Symbol.for('yanz.ioe.core');
+    if (_w[_sym]) return;
+    _w[_sym] = 1;
+    const __yanz_scope = (typeof location === 'undefined' || !/^https?:$/i.test(location.protocol || ''))
+        ? (typeof window !== 'undefined' ? window : globalThis) : {{}};
 {raw_bundle}
 }})();
 """
 
-# 1. Standard YANZIOE.js
+def obfuscate_js(code_str, mode="main"):
+    helper = ROOT / "obfuscate_helper.js"
+    if not helper.exists():
+        raise RuntimeError(f"Missing obfuscate_helper.js at {helper}")
+    with tempfile.TemporaryDirectory() as td:
+        inp = Path(td) / "in.js"
+        out = Path(td) / "out.js"
+        inp.write_text(code_str, encoding="utf-8")
+        subprocess.run(["node", str(helper), mode, str(inp), str(out)], check=True)
+        return out.read_text(encoding="utf-8")
+
+# 1. Standard YANZIOE.js (local verification harness)
 dist_js = ROOT / 'YANZIOE.js'
 dist_js.write_text(bundle_code, encoding='utf-8')
 print(f"[OK] Generated {dist_js.name} ({len(bundle_code)} bytes)")
+
+print("[...] Obfuscating release bundle + MV3 workers (RC4 + CFF + Self-Defending + Anti-Debug)...")
+protected_code = obfuscate_js(bundle_code, "main")
+print(f"[OK] Protected bundle ready ({len(protected_code)} bytes)")
 
 # 2. Userscript header builder
 def make_userscript_header(ver, is_coke=False):
@@ -87,16 +110,16 @@ def make_userscript_header(ver, is_coke=False):
 
 # 3. Standard YANZIOE.user.js
 dist_user_js = ROOT / 'YANZIOE.user.js'
-dist_user_js.write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
+dist_user_js.write_text(make_userscript_header(VERSION, True) + protected_code, encoding='utf-8')
 print(f"[OK] Generated {dist_user_js.name}")
 
-# 4. CoKey Standalone files
-coke_header = "/* YANZIOE VIP v" + VERSION + " CoKey (YanzBn License + Hybrid CAS & AI Solver) */\n"
+# 4. CoKey Standalone files (protected)
+coke_header = "/* YANZIOE VIP v" + VERSION + " CoKey (YanzBn License + Anti-Tamper Protected) */\n"
 dist_coke_min = ROOT / 'yanzioeKoKey.js'
-dist_coke_min.write_text(coke_header + bundle_code, encoding='utf-8')
+dist_coke_min.write_text(coke_header + protected_code, encoding='utf-8')
 
 dist_coke_user = ROOT / 'YANZIOE_KoKey.user.js'
-dist_coke_user.write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
+dist_coke_user.write_text(make_userscript_header(VERSION, True) + protected_code, encoding='utf-8')
 print(f"[OK] Generated {dist_coke_min.name} and {dist_coke_user.name}")
 
 # 5. Helper to write Chrome Extension MV3 with MAIN world execution, Bridge & Background Service Worker (Zero CSP/CORS)
@@ -272,15 +295,18 @@ def write_extension_dir(target_dir, code, name_suffix=""):
     }
 
     (target_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
-    (target_dir / 'bridge.js').write_text(BRIDGE_JS, encoding='utf-8')
-    (target_dir / 'background.js').write_text(BACKGROUND_JS, encoding='utf-8')
+    (target_dir / 'bridge.js').write_text(PROTECTED_BRIDGE_JS, encoding='utf-8')
+    (target_dir / 'background.js').write_text(PROTECTED_BACKGROUND_JS, encoding='utf-8')
     (target_dir / 'content.js').write_text(code, encoding='utf-8')
     (target_dir / 'YANZIOE.js').write_text(code, encoding='utf-8')
-    print(f"[OK] Extension (Single-Run MAIN world & Storage Bridge) written to {target_dir.name}")
+    print(f"[OK] Extension (Protected MAIN world & Storage Bridge) written to {target_dir.name}")
 
-# Standard Extension in Repo
-write_extension_dir(ROOT / 'YANZIOE_Extension', bundle_code, "")
-write_extension_dir(ROOT / 'YANZIOE_Extension_KoKey', bundle_code, "CoKey VIP")
+PROTECTED_BRIDGE_JS = obfuscate_js(BRIDGE_JS, "worker")
+PROTECTED_BACKGROUND_JS = obfuscate_js(BACKGROUND_JS, "worker")
+
+# Standard Extension in Repo (Protected)
+write_extension_dir(ROOT / 'YANZIOE_Extension', protected_code, "")
+write_extension_dir(ROOT / 'YANZIOE_Extension_KoKey', protected_code, "CoKey VIP")
 
 # 6. Export CoKey release to Downloads folder
 def pack_folder_zip(src_dir, zip_dest):
@@ -294,11 +320,11 @@ def pack_folder_zip(src_dir, zip_dest):
 dist_release_dir = DOWNLOADS_DIR / f'YANZIOE_v{VERSION}_CoKey'
 dist_release_dir.mkdir(parents=True, exist_ok=True)
 
-# Copy deliverables into release folder
-(dist_release_dir / 'YANZIOE_CoKey.user.js').write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
-(dist_release_dir / 'yanzioeCoKey.js').write_text(coke_header + bundle_code, encoding='utf-8')
-(dist_release_dir / 'yanzioeKoKey.js').write_text(coke_header + bundle_code, encoding='utf-8')
-write_extension_dir(dist_release_dir / 'YANZIOE_Extension_CoKey', bundle_code, "CoKey VIP")
+# Copy deliverables into release folder (Protected)
+(dist_release_dir / 'YANZIOE_CoKey.user.js').write_text(make_userscript_header(VERSION, True) + protected_code, encoding='utf-8')
+(dist_release_dir / 'yanzioeCoKey.js').write_text(coke_header + protected_code, encoding='utf-8')
+(dist_release_dir / 'yanzioeKoKey.js').write_text(coke_header + protected_code, encoding='utf-8')
+write_extension_dir(dist_release_dir / 'YANZIOE_Extension_CoKey', protected_code, "CoKey VIP")
 
 guide_src = ROOT / 'HUONG_DAN_CAI_DAT_KoKey.txt'
 if guide_src.exists():

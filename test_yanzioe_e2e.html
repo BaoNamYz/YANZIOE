@@ -1001,8 +1001,23 @@
                 log('36. Blocks premature Submit on partial Game11 blocks/unplaced tiles & dismisses incomplete popup',
                     blockedIncompleteA && heldSubmitOnUnplacedB && res36C === true && popupDismissed36);
 
+                // Test 37: Anti-Tamper Sealed Proof, Anchor Lock & Frozen IOE.license Guard
+                const origIsLicFn = window.IOE.license.isLicensed;
+                let tamperThrown = false;
+                try {
+                    window.IOE.license.isLicensed = () => true;
+                } catch (e) {
+                    tamperThrown = true;
+                }
+                const frozenIntact = window.IOE.license.isLicensed === origIsLicFn;
+                const badAnchorRejected = window.IOE.license.verifySeal('0000000000000000') === false;
+                const strictUnsealedRejected = window.IOE.license.verifySeal('93e7d590b85d867a', true) === false;
+                const liveAnchorAccepted = window.IOE.license.verifySeal('93e7d590b85d867a', false) === true;
+                log('37. Anti-Tamper seals PK/API anchor, rejects forged state.licensed in strict mode & freezes IOE.license',
+                    (tamperThrown || frozenIntact) && frozenIntact && badAnchorRejected && strictUnsealedRejected && liveAnchorAccepted);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 38;
+                const allPassed = failCount === 0 && passCount >= 39;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

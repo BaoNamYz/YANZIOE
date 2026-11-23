@@ -156,7 +156,7 @@
 
     function createMainMenu() {
         if (!isTopFrame()) return;
-        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return;
+        if (!IOE.license?.verifySeal?.('93e7d590b85d867a')) return;
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
         const root = document.createElement('div');
@@ -605,7 +605,7 @@
     }
 
     IOE.events.on('licenseVerified', () => IOE.onBodyReady(createMainMenu));
-    if (IOE.state?.licensed || IOE.license?.isLicensed?.()) {
+    if (IOE.license?.verifySeal?.('93e7d590b85d867a')) {
         IOE.onBodyReady(createMainMenu);
     }
 })(typeof window !== 'undefined' ? window : globalThis);

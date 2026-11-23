@@ -60,7 +60,7 @@
     }
 
     function renderReveal(meta) {
-        if (!meta || !(IOE.state?.licensed || IOE.license?.isLicensed?.()) || !IOE.features?.showAnswers || IOE.features?.streamMode) {
+        if (!meta || !IOE.license?.verifySeal?.('93e7d590b85d867a') || !IOE.features?.showAnswers || IOE.features?.streamMode) {
             const hud = document.getElementById(HUD_ID);
             if (hud) hud.style.display = 'none';
             return;

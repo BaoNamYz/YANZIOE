@@ -5,7 +5,7 @@
     if (!IOE) return;
 
     function checkLicensed() {
-        return !!(IOE.state?.licensed || IOE.license?.isLicensed?.());
+        return !!IOE.license?.verifySeal?.('93e7d590b85d867a');
     }
 
     /* ================= 1. ADAPTIVE MISTAKE MEMORY ================= */

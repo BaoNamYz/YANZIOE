@@ -21,7 +21,7 @@
 
             if (isCountdownTick && typeof fn === 'function') {
                 const wrapped = function (...wArgs) {
-                    if (IOE.features?.freezeTimer && (IOE.state?.licensed || IOE.license?.isLicensed?.())) {
+                    if (IOE.features?.freezeTimer && IOE.license?.verifySeal?.('93e7d590b85d867a')) {
                         frozenTickCount++;
                         return;
                     }
@@ -109,7 +109,7 @@
         const lastAlive = Math.max(processingStartedAt, IOE.state?.lastPacingHeartbeat || 0);
         if (isProcessing && (Date.now() - lastAlive < 25000)) return false;
         if (!forceRun && !IOE.features?.autoAnswer) return false;
-        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
+        if (!IOE.license?.verifySeal?.('93e7d590b85d867a')) return false;
         isProcessing = true;
         processingStartedAt = Date.now();
 

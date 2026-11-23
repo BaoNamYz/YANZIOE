@@ -159,6 +159,58 @@
         for (let i = 0; i < u.length; i++) u[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
         return u;
     }
+    const GATE_NONCE = randomHex(32);
+    let sealedTicket = null;
+
+    function sha512Hex(str) {
+        const u = sha512Bytes(new TextEncoder().encode(String(str)));
+        let out = '';
+        for (let i = 0; i < u.length; i++) out += u[i].toString(16).padStart(2, '0');
+        return out;
+    }
+
+    function parseExpiresMs(str) {
+        const s = String(str || '').trim();
+        if (!s || /vĩnh viễn|lifetime|forever|unlimited/i.test(s)) return Infinity;
+        const iso = s.includes(' ') && !s.includes('T') ? s.replace(' ', 'T') : s;
+        let t = Date.parse(iso);
+        if (!Number.isFinite(t)) {
+            const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+            if (m) t = Date.parse(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}T23:59:59`);
+        }
+        return Number.isFinite(t) ? t : (Date.now() + 86400000);
+    }
+
+    function sealLicenseTicket(data) {
+        const expMs = parseExpiresMs(data.expiresAt);
+        if (expMs <= Date.now()) return false;
+        const anchor = sha512Hex(PK_HEX + '|' + VERIFY_API).slice(0, 16);
+        const proof = sha512Hex(`${GATE_NONCE}|${anchor}|${data.key}|${data.hwid}|${data.edSig}|${data.edTs}|${data.expiresAt}`);
+        sealedTicket = { key: data.key, hwid: data.hwid, edSig: data.edSig, edTs: data.edTs, expiresAt: data.expiresAt, expMs, anchor, proof };
+        return true;
+    }
+
+    function verifySeal(expectedAnchor = '93e7d590b85d867a', strictLive = false) {
+        try {
+            const liveAnchor = sha512Hex(PK_HEX + '|' + VERIFY_API).slice(0, 16);
+            if (expectedAnchor && liveAnchor !== expectedAnchor) return false;
+            if (sealedTicket && licenseState.licensed) {
+                const expectProof = sha512Hex(`${GATE_NONCE}|${liveAnchor}|${sealedTicket.key}|${sealedTicket.hwid}|${sealedTicket.edSig}|${sealedTicket.edTs}|${sealedTicket.expiresAt}`);
+                return checkMatch(expectProof, sealedTicket.proof) && sealedTicket.hwid === cachedHwid && sealedTicket.expMs > Date.now();
+            }
+            if (strictLive || (typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || ''))) return false;
+            return !!IOE.state?.licensed;
+        } catch (e) {
+            return false;
+        }
+    }
+    function checkMatch(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        let diff = 0;
+        for (let i = 0; i < a.length; i++) diff |= (a.charCodeAt(i) ^ b.charCodeAt(i));
+        return diff === 0;
+    }
+
     function verifyEd25519(sigHex, msgStr, pkHex = PK_HEX) {
         try {
             const sig = hexToBytes(sigHex);
@@ -360,7 +412,8 @@
             const edSig = String(j.ed_sig || '');
             const edTs = String(j.ed_ts || '');
             const canonMsg = `YIOE1|${respKey}|${respHwid}|${nonce}|${edTs}|${respExp}`;
-            if (!verifyEd25519(edSig, canonMsg)) {
+            if (!verifyEd25519(edSig, canonMsg) || !sealLicenseTicket({ key: respKey, hwid, edSig, edTs, expiresAt: respExp })) {
+                sealedTicket = null;
                 licenseState.licensed = false;
                 licenseState.lastError = 'Chữ ký bảo mật Ed25519 từ server không khớp! Từ chối kích hoạt.';
                 return { ok: false, error: licenseState.lastError };
@@ -396,6 +449,7 @@
     }
 
     async function clearKey() {
+        sealedTicket = null;
         licenseState.licensed = false;
         licenseState.key = '';
         IOE.state.licensed = false;
@@ -525,7 +579,8 @@
                 const c = JSON.parse(rawCache);
                 const ageMs = Date.now() - Number(c.cachedAt || 0);
                 const msg = `YIOE1|${c.key}|${c.hwid}|${c.nonce}|${c.ed_ts}|${c.expires_at}`;
-                if (c.key && c.hwid === hwid && ageMs >= 0 && ageMs < 1800000 && verifyEd25519(c.ed_sig, msg)) {
+                if (c.key && c.hwid === hwid && ageMs >= 0 && ageMs < 1800000 && verifyEd25519(c.ed_sig, msg) &&
+                    sealLicenseTicket({ key: c.key, hwid, edSig: c.ed_sig, edTs: c.ed_ts, expiresAt: c.expires_at })) {
                     licenseState.licensed = true;
                     licenseState.key = c.key;
                     licenseState.expiresAt = c.expires_at;
@@ -556,21 +611,32 @@
         return false;
     }
 
-    IOE.kv = {
-        get: kvGet,
-        set: kvSet
-    };
-    IOE.license = {
+    Object.defineProperty(IOE, 'kv', {
+        value: Object.freeze({ get: kvGet, set: kvSet }),
+        enumerable: true,
+        writable: false,
+        configurable: false
+    });
+    const licApi = Object.freeze({
         getState: () => ({ ...licenseState }),
-        isLicensed: () => !!licenseState.licensed,
+        isLicensed: () => verifySeal('93e7d590b85d867a', false),
+        verifySeal,
         getHardwareHwid,
         verifyKeyRemote,
         verifyEd25519,
         clearKey,
         showLicenseModal,
         bootstrap: bootstrapLicenseGate
-    };
-    win.YanzIOELicense = IOE.license;
+    });
+    Object.defineProperty(IOE, 'license', {
+        value: licApi,
+        enumerable: true,
+        writable: false,
+        configurable: false
+    });
+    if (typeof location === 'undefined' || !/^https?:$/i.test(location.protocol || '')) {
+        win.YanzIOELicense = licApi;
+    }
 
     bootstrapLicenseGate();
 })(typeof window !== 'undefined' ? window : globalThis);

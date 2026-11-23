@@ -1,14 +1,25 @@
-/* YANZIOE VIP v1.2.8 */
+/* YANZIOE VIP v1.2.9 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (_w.__YANZIOE_BOOTED__) return;
-    _w.__YANZIOE_BOOTED__ = true;
+    const _sym = Symbol.for('yanz.ioe.core');
+    if (_w[_sym]) return;
+    _w[_sym] = 1;
+    const __yanz_scope = (typeof location === 'undefined' || !/^https?:$/i.test(location.protocol || ''))
+        ? (typeof window !== 'undefined' ? window : globalThis) : {};
 /* --- utils/utils.js --- */
 (function (global) {
     'use strict';
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-    /* Capture pristine native timers before Freeze Timer or page scripts alter them */
+    /* Authorized host enforcement on live web origins (allows file:// local harness) */
+    if (typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || '') &&
+        !/(^|\.)(ioe\.vn|go\.vn|vtc\.vn|vtconline\.vn|goplay\.vn)$/i.test(location.hostname || '')) {
+        return;
+    }
+
+    /* Capture pristine native timers & fetch before page scripts alter them */
+    const isLiveOrigin = (typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || ''));
+    const nativeFetch = typeof win.fetch === 'function' ? win.fetch.bind(win) : null;
     const nativeSetInterval = win.setInterval.bind(win);
     const nativeClearInterval = win.clearInterval.bind(win);
     const nativeSetTimeout = win.setTimeout.bind(win);
@@ -144,7 +155,7 @@
                 fetchBody = fd;
                 delete cleanHeaders['Content-Type'];
             }
-            const r = await fetch(url, { method, headers: cleanHeaders, body: fetchBody, signal: ctrl.signal });
+            const r = await ((isLiveOrigin && nativeFetch) ? nativeFetch : fetch)(url, { method, headers: cleanHeaders, body: fetchBody, signal: ctrl.signal });
             if (responseType === 'base64' && typeof r.arrayBuffer === 'function') {
                 const buf = await r.arrayBuffer();
                 const bytes = new Uint8Array(buf);
@@ -223,8 +234,9 @@
         return waitMs;
     }
 
+    let _devHarnessLicensed = false;
     const ioeState = {
-        version: '1.2.8',
+        version: '1.2.9',
         events,
         toast,
         delay,
@@ -242,9 +254,8 @@
             setTimeout: nativeSetTimeout,
             clearTimeout: nativeClearTimeout
         },
-        net: { requestExternal },
+        net: { requestExternal, nativeFetch },
         state: {
-            licensed: false,
             isSolving: false,
             currentQuestionId: null,
             packetHits: 0,
@@ -286,9 +297,23 @@
         }
     };
 
+    Object.defineProperty(ioeState.state, 'licensed', {
+        enumerable: true,
+        configurable: false,
+        get() {
+            if (!isLiveOrigin && _devHarnessLicensed) return true;
+            return !!ioeState.license?.verifySeal?.('93e7d590b85d867a', true);
+        },
+        set(v) {
+            if (!isLiveOrigin) _devHarnessLicensed = !!v;
+        }
+    });
+
     global.IOE = ioeState;
-    win.IOE = ioeState;
-})(typeof window !== 'undefined' ? window : globalThis);
+    if (!isLiveOrigin) {
+        win.IOE = ioeState;
+    }
+})(__yanz_scope);
 
 
 /* --- functions/licenseGate.js --- */
@@ -453,6 +478,58 @@
         for (let i = 0; i < u.length; i++) u[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
         return u;
     }
+    const GATE_NONCE = randomHex(32);
+    let sealedTicket = null;
+
+    function sha512Hex(str) {
+        const u = sha512Bytes(new TextEncoder().encode(String(str)));
+        let out = '';
+        for (let i = 0; i < u.length; i++) out += u[i].toString(16).padStart(2, '0');
+        return out;
+    }
+
+    function parseExpiresMs(str) {
+        const s = String(str || '').trim();
+        if (!s || /vĩnh viễn|lifetime|forever|unlimited/i.test(s)) return Infinity;
+        const iso = s.includes(' ') && !s.includes('T') ? s.replace(' ', 'T') : s;
+        let t = Date.parse(iso);
+        if (!Number.isFinite(t)) {
+            const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+            if (m) t = Date.parse(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}T23:59:59`);
+        }
+        return Number.isFinite(t) ? t : (Date.now() + 86400000);
+    }
+
+    function sealLicenseTicket(data) {
+        const expMs = parseExpiresMs(data.expiresAt);
+        if (expMs <= Date.now()) return false;
+        const anchor = sha512Hex(PK_HEX + '|' + VERIFY_API).slice(0, 16);
+        const proof = sha512Hex(`${GATE_NONCE}|${anchor}|${data.key}|${data.hwid}|${data.edSig}|${data.edTs}|${data.expiresAt}`);
+        sealedTicket = { key: data.key, hwid: data.hwid, edSig: data.edSig, edTs: data.edTs, expiresAt: data.expiresAt, expMs, anchor, proof };
+        return true;
+    }
+
+    function verifySeal(expectedAnchor = '93e7d590b85d867a', strictLive = false) {
+        try {
+            const liveAnchor = sha512Hex(PK_HEX + '|' + VERIFY_API).slice(0, 16);
+            if (expectedAnchor && liveAnchor !== expectedAnchor) return false;
+            if (sealedTicket && licenseState.licensed) {
+                const expectProof = sha512Hex(`${GATE_NONCE}|${liveAnchor}|${sealedTicket.key}|${sealedTicket.hwid}|${sealedTicket.edSig}|${sealedTicket.edTs}|${sealedTicket.expiresAt}`);
+                return checkMatch(expectProof, sealedTicket.proof) && sealedTicket.hwid === cachedHwid && sealedTicket.expMs > Date.now();
+            }
+            if (strictLive || (typeof location !== 'undefined' && /^https?:$/i.test(location.protocol || ''))) return false;
+            return !!IOE.state?.licensed;
+        } catch (e) {
+            return false;
+        }
+    }
+    function checkMatch(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        let diff = 0;
+        for (let i = 0; i < a.length; i++) diff |= (a.charCodeAt(i) ^ b.charCodeAt(i));
+        return diff === 0;
+    }
+
     function verifyEd25519(sigHex, msgStr, pkHex = PK_HEX) {
         try {
             const sig = hexToBytes(sigHex);
@@ -654,7 +731,8 @@
             const edSig = String(j.ed_sig || '');
             const edTs = String(j.ed_ts || '');
             const canonMsg = `YIOE1|${respKey}|${respHwid}|${nonce}|${edTs}|${respExp}`;
-            if (!verifyEd25519(edSig, canonMsg)) {
+            if (!verifyEd25519(edSig, canonMsg) || !sealLicenseTicket({ key: respKey, hwid, edSig, edTs, expiresAt: respExp })) {
+                sealedTicket = null;
                 licenseState.licensed = false;
                 licenseState.lastError = 'Chữ ký bảo mật Ed25519 từ server không khớp! Từ chối kích hoạt.';
                 return { ok: false, error: licenseState.lastError };
@@ -690,6 +768,7 @@
     }
 
     async function clearKey() {
+        sealedTicket = null;
         licenseState.licensed = false;
         licenseState.key = '';
         IOE.state.licensed = false;
@@ -819,7 +898,8 @@
                 const c = JSON.parse(rawCache);
                 const ageMs = Date.now() - Number(c.cachedAt || 0);
                 const msg = `YIOE1|${c.key}|${c.hwid}|${c.nonce}|${c.ed_ts}|${c.expires_at}`;
-                if (c.key && c.hwid === hwid && ageMs >= 0 && ageMs < 1800000 && verifyEd25519(c.ed_sig, msg)) {
+                if (c.key && c.hwid === hwid && ageMs >= 0 && ageMs < 1800000 && verifyEd25519(c.ed_sig, msg) &&
+                    sealLicenseTicket({ key: c.key, hwid, edSig: c.ed_sig, edTs: c.ed_ts, expiresAt: c.expires_at })) {
                     licenseState.licensed = true;
                     licenseState.key = c.key;
                     licenseState.expiresAt = c.expires_at;
@@ -850,24 +930,35 @@
         return false;
     }
 
-    IOE.kv = {
-        get: kvGet,
-        set: kvSet
-    };
-    IOE.license = {
+    Object.defineProperty(IOE, 'kv', {
+        value: Object.freeze({ get: kvGet, set: kvSet }),
+        enumerable: true,
+        writable: false,
+        configurable: false
+    });
+    const licApi = Object.freeze({
         getState: () => ({ ...licenseState }),
-        isLicensed: () => !!licenseState.licensed,
+        isLicensed: () => verifySeal('93e7d590b85d867a', false),
+        verifySeal,
         getHardwareHwid,
         verifyKeyRemote,
         verifyEd25519,
         clearKey,
         showLicenseModal,
         bootstrap: bootstrapLicenseGate
-    };
-    win.YanzIOELicense = IOE.license;
+    });
+    Object.defineProperty(IOE, 'license', {
+        value: licApi,
+        enumerable: true,
+        writable: false,
+        configurable: false
+    });
+    if (typeof location === 'undefined' || !/^https?:$/i.test(location.protocol || '')) {
+        win.YanzIOELicense = licApi;
+    }
 
     bootstrapLicenseGate();
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 
 /* --- functions/oneko.js --- */
@@ -916,7 +1007,7 @@
     } else {
         initOneko();
     }
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 
 /* --- functions/questionSpoof.js --- */
@@ -927,7 +1018,7 @@
     if (!IOE) return;
 
     function checkLicensed() {
-        return !!(IOE.state?.licensed || IOE.license?.isLicensed?.());
+        return !!IOE.license?.verifySeal?.('93e7d590b85d867a');
     }
 
     /* ================= 1. ADAPTIVE MISTAKE MEMORY ================= */
@@ -2076,7 +2167,7 @@
         isAnswerWrong,
         getWrongAnswers
     };
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 
 /* --- functions/canvasEngine.js --- */
@@ -2087,7 +2178,7 @@
     if (!IOE) return;
 
     function isLicensed() {
-        return !!(IOE.state?.licensed || IOE.license?.isLicensed?.());
+        return !!IOE.license?.verifySeal?.('93e7d590b85d867a');
     }
 
     function stripOptPrefix(s) {
@@ -3463,7 +3554,7 @@
         typeIntoCanvas: typeCanvasString,
         setDomInputValue
     };
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 
 /* --- functions/answerRevealer.js --- */
@@ -3529,7 +3620,7 @@
     }
 
     function renderReveal(meta) {
-        if (!meta || !(IOE.state?.licensed || IOE.license?.isLicensed?.()) || !IOE.features?.showAnswers || IOE.features?.streamMode) {
+        if (!meta || !IOE.license?.verifySeal?.('93e7d590b85d867a') || !IOE.features?.showAnswers || IOE.features?.streamMode) {
             const hud = document.getElementById(HUD_ID);
             if (hud) hud.style.display = 'none';
             return;
@@ -3593,7 +3684,7 @@
 
     IOE.events.on('questionSolved', renderReveal);
     IOE.revealer = { renderReveal };
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 
 /* --- functions/autoAnswer.js --- */
@@ -3620,7 +3711,7 @@
 
             if (isCountdownTick && typeof fn === 'function') {
                 const wrapped = function (...wArgs) {
-                    if (IOE.features?.freezeTimer && (IOE.state?.licensed || IOE.license?.isLicensed?.())) {
+                    if (IOE.features?.freezeTimer && IOE.license?.verifySeal?.('93e7d590b85d867a')) {
                         frozenTickCount++;
                         return;
                     }
@@ -3708,7 +3799,7 @@
         const lastAlive = Math.max(processingStartedAt, IOE.state?.lastPacingHeartbeat || 0);
         if (isProcessing && (Date.now() - lastAlive < 25000)) return false;
         if (!forceRun && !IOE.features?.autoAnswer) return false;
-        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
+        if (!IOE.license?.verifySeal?.('93e7d590b85d867a')) return false;
         isProcessing = true;
         processingStartedAt = Date.now();
 
@@ -3898,7 +3989,7 @@
         extractGenericDomQuestion,
         getFreezeTicks: () => frozenTickCount
     };
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 
 /* --- visuals/mainMenu.js --- */
@@ -4060,7 +4151,7 @@
 
     function createMainMenu() {
         if (!isTopFrame()) return;
-        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return;
+        if (!IOE.license?.verifySeal?.('93e7d590b85d867a')) return;
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
         const root = document.createElement('div');
@@ -4509,9 +4600,9 @@
     }
 
     IOE.events.on('licenseVerified', () => IOE.onBodyReady(createMainMenu));
-    if (IOE.state?.licensed || IOE.license?.isLicensed?.()) {
+    if (IOE.license?.verifySeal?.('93e7d590b85d867a')) {
         IOE.onBodyReady(createMainMenu);
     }
-})(typeof window !== 'undefined' ? window : globalThis);
+})(__yanz_scope);
 
 })();
