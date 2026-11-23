@@ -1,5 +1,5 @@
-/* YANZIOE VIP v1.2.7 CoKey (YanzBn License + Hybrid CAS & AI Solver) */
-/* YANZIOE VIP v1.2.7 */
+/* YANZIOE VIP v1.2.8 CoKey (YanzBn License + Hybrid CAS & AI Solver) */
+/* YANZIOE VIP v1.2.8 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     if (_w.__YANZIOE_BOOTED__) return;
@@ -225,7 +225,7 @@
     }
 
     const ioeState = {
-        version: '1.2.7',
+        version: '1.2.8',
         events,
         toast,
         delay,
@@ -1413,7 +1413,7 @@
         const isTrueFalse = cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o));
         let instruction = '';
         if (taskHint === 'reorder') {
-            instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
+            instruction = `Task: Reorder ALL ${cleanOpts.length} given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Use ALL ${cleanOpts.length} blocks verbatim; do NOT add, drop, or paraphrase any word.`;
         } else if (taskHint === 'pairs') {
             instruction = `Task: Match ALL ${cleanOpts.length} cards below into ${Math.floor(cleanOpts.length / 2)} exact pairs.\nCards:\n${cleanOpts.map((c, i) => `${i}: ${c}`).join('\n')}\nRules: Return ONLY raw JSON {"answer": [["card1", "card2"], ...]} with exact card texts.`;
         } else if (taskHint === 'blank' && mediaOpts?.maxInput > 0) {
@@ -1871,6 +1871,7 @@
             }
             if (obj.examKey && typeof obj.examKey === 'string' && obj.examKey !== IOE.state.currentExamKey) {
                 IOE.state.currentExamKey = obj.examKey;
+                IOE.state._visitedTabs = new Set();
                 const doingSec = Number(obj.timeDoing || 0);
                 IOE.state.examStartedAt = Date.now() - (doingSec > 0 ? doingSec * 1000 : 0);
             }
@@ -2751,7 +2752,7 @@
             for (const c of (n._components || [])) {
                 if (!c) continue;
                 if (!gamePlayComp && (c.btnSubmit || c.quest || typeof c.findQuestModel === 'function')) gamePlayComp = c;
-                if (!reorderComp && Array.isArray(c.listText) && Array.isArray(c.listAnswer)) reorderComp = c;
+                if (!reorderComp && Array.isArray(c.listText) && (Array.isArray(c.listAnswer) || typeof c._enableClick === 'boolean')) reorderComp = c;
                 if (!matchComp && c.ctnCross && (c.rootGame || c.data?.game?.question)) matchComp = c;
                 if (!clozeComp && c.contentAnswer && c.txtQuestion) clozeComp = c;
                 if (!textComp && c.questionModel && Array.isArray(c.buttons) && c.node?.activeInHierarchy !== false) textComp = c;
@@ -2902,6 +2903,7 @@
             let answerBtn = gamePlayComp?.btnSubmit ? { node: gamePlayComp.btnSubmit.node || gamePlayComp.btnSubmit, text: 'ANSWER', name: 'btnSubmit' } : null;
 
             if (reorderComp && reorderComp.listText.length >= 4) {
+                const filledSlots = Array.isArray(reorderComp.listAnswer) ? reorderComp.listAnswer.filter(Boolean).length : 0;
                 for (const tileNode of reorderComp.listText) {
                     if (!canTraverseNode(tileNode)) continue;
                     if (typeof tileNode.opacity === 'number' && tileNode.opacity <= 8) continue;
@@ -2910,6 +2912,7 @@
                         wordBlocks.push({ node: tileNode, text: txt.trim(), name: tileNode.name || '' });
                     }
                 }
+                if (filledSlots === 0 && wordBlocks.length < reorderComp.listText.length) return false;
             } else {
                 const sceneHasLongPassage = extractCocosTexts(scene).some(x => x.text.length > 90);
                 if (sceneHasLongPassage) return false;
@@ -2949,31 +2952,68 @@
             const meta = await IOE.question?.solveQuestion(null, promptContext, words, 'reorder');
             if (!meta || !meta.answer) return false;
 
-            const fullTarget = String(meta.answer).trim().toLowerCase().replace(/[^a-z0-9\s']/g, '').replace(/\s+/g, ' ');
+            const normReo = s => String(s || '').toLowerCase()
+                .replace(/[\u2018\u2019`]/g, "'")
+                .replace(/[^a-z0-9\s']/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const fullTarget = normReo(meta.answer);
             const availableBlocks = wordBlocks.slice();
             const clickOrder = [];
             let remaining = fullTarget;
+            let missingInsertIdx = -1;
 
             while (remaining.length > 0 && availableBlocks.length > 0) {
                 remaining = remaining.trim();
                 let foundIdx = availableBlocks.findIndex(block => {
-                    const cb = block.text.toLowerCase().replace(/[^a-z0-9\s']/g, '').trim();
+                    const cb = normReo(block.text);
                     return cb && (remaining === cb || remaining.startsWith(cb + ' '));
                 });
                 if (foundIdx < 0) {
                     foundIdx = availableBlocks.findIndex(block => {
-                        const cb = block.text.toLowerCase().replace(/[^a-z0-9\s']/g, '').trim();
+                        const cb = normReo(block.text);
                         return cb && remaining.startsWith(cb);
                     });
                 }
-                if (foundIdx < 0) break;
+                if (foundIdx < 0) {
+                    let bestPos = Infinity, bestIdx = -1, bestLen = 0;
+                    availableBlocks.forEach((block, i) => {
+                        const cb = normReo(block.text);
+                        if (!cb) return;
+                        const esc = cb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const m = new RegExp(`(?:^|\\s)${esc}(?:\\s|$)`).exec(remaining);
+                        const pos = m ? (m[0].startsWith(' ') ? m.index + 1 : m.index) : remaining.indexOf(cb);
+                        if (pos >= 0 && (pos < bestPos || (pos === bestPos && cb.length > bestLen))) {
+                            bestPos = pos; bestIdx = i; bestLen = cb.length;
+                        }
+                    });
+                    if (bestIdx >= 0 && bestPos < 36) {
+                        if (missingInsertIdx < 0) missingInsertIdx = clickOrder.length;
+                        const chosen = availableBlocks.splice(bestIdx, 1)[0];
+                        clickOrder.push(chosen);
+                        remaining = remaining.slice(bestPos + bestLen).trim();
+                        continue;
+                    }
+                    if (missingInsertIdx < 0) missingInsertIdx = clickOrder.length;
+                    remaining = remaining.replace(/^\S+\s*/, '');
+                    continue;
+                }
                 const chosen = availableBlocks.splice(foundIdx, 1)[0];
-                const cb = chosen.text.toLowerCase().replace(/[^a-z0-9\s']/g, '').trim();
+                const cb = normReo(chosen.text);
                 clickOrder.push(chosen);
                 remaining = remaining.slice(cb.length).trim();
             }
 
-            if (clickOrder.length < 3) return false;
+            if (availableBlocks.length === 1 && clickOrder.length >= 2) {
+                const lastBlk = availableBlocks.pop();
+                const idxAt = (missingInsertIdx >= 0 && missingInsertIdx <= clickOrder.length) ? missingInsertIdx : clickOrder.length;
+                clickOrder.splice(idxAt, 0, lastBlk);
+            }
+
+            if (clickOrder.length < Math.max(3, wordBlocks.length)) {
+                IOE.toast(`⚠️ Chưa ghép đủ từ (${clickOrder.length}/${wordBlocks.length}) — tạm dừng nộp để tránh sót!`, 2000);
+                return false;
+            }
             const totalReorderQ = IOE.state?.totalExamQuestions || gamePlayComp?.quest?.data?.questionArr?.length || 10;
             const curKey = `${promptContext.slice(0, 48)}`;
             if (IOE.state.currentQuestKey !== curKey) {
@@ -2985,13 +3025,29 @@
                 await clickCocosNode(block.node);
                 await IOE.delay?.(pacingOn ? (340 + Math.floor(Math.random() * 220)) : 240);
             }
+            if (reorderComp?.listText?.length) {
+                const getUnplaced = () => reorderComp.listText.filter(t => canTraverseNode(t) && (typeof t.opacity !== 'number' || t.opacity > 10));
+                const missed = getUnplaced();
+                if (missed.length > 0) {
+                    await IOE.delay?.(220);
+                    for (const mNode of missed) {
+                        await clickCocosNode(mNode);
+                        await IOE.delay?.(240);
+                    }
+                    await IOE.delay?.(200);
+                }
+                if (getUnplaced().length > 0) {
+                    IOE.toast('⚠️ Còn ô từ chưa lên khung — tạm hoãn nhấn Submit!', 1800);
+                    return false;
+                }
+            }
             if (pacingOn && IOE.pacing?.waitQuestionReadTime) {
                 await IOE.pacing.waitQuestionReadTime(3000, false);
                 if (typeof gamePlayComp?.currentQuestIdx === 'number' && gamePlayComp.currentQuestIdx >= totalReorderQ - 1 && IOE.pacing?.waitUntilMinElapsed) {
                     await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalReorderQ), 'nộp bài cuối');
                 }
             }
-            if (answerBtn?.node) {
+            if (answerBtn?.node && clickOrder.length >= wordBlocks.length) {
                 await IOE.delay?.(320);
                 await clickCocosNode(answerBtn.node);
             }
@@ -3130,6 +3186,17 @@
         if (cocosScene) {
             const clickables = findCocosClickables(cocosScene);
 
+            // Recover cleanly if "Bạn chưa chọn hết các từ" popup is blocking the screen
+            const modalTexts = extractCocosTexts(cocosScene).map(t => t.text).join(' ');
+            if (/(bạn chưa chọn hết|chọn hết các từ)/i.test(modalTexts)) {
+                const okBtn = clickables.find(c => /^(ok|đồng ý|tiếp tục)$/i.test((c.text || '').trim()));
+                if (okBtn) {
+                    await clickCocosNode(okBtn.node);
+                    await IOE.delay?.(400);
+                    return true;
+                }
+            }
+
             // Only auto-press OK / Start if it's an intro/transition screen (<= 3 clickable buttons total)
             if (clickables.length > 0 && clickables.length <= 3) {
                 for (const c of clickables) {
@@ -3262,6 +3329,7 @@
                         textComp.inputTxt = finalTyped;
                         try { textComp.updateQuestContent?.(); } catch (e) {}
                         IOE.toast(`✍️ Đã điền đáp án (${finalTyped.length}/${maxInput}): ${finalTyped}`, 1400);
+                        if (finalTyped.length < maxInput) return false;
                         const submitBtnComp = textComp.buttons?.find?.(b => b.btnIdx === 6 && b.node && canTraverseNode(b.node));
                         await IOE.delay?.(220);
                         if (submitBtnComp?.node) {
@@ -3333,9 +3401,6 @@
                                     if (nextTab) {
                                         await clickCocosNode(nextTab.node);
                                         await IOE.delay?.(260);
-                                        if (getStemSig() === prevStemSig && hasSeparateSubmit) {
-                                            await clickCocosNode(separateSubmitNode);
-                                        }
                                     } else if (hasSeparateSubmit) {
                                         if (IOE.pacing?.isHumanPacingActive?.() && IOE.pacing?.waitUntilMinElapsed) {
                                             await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(tabBtns.length), 'nộp bài Đọc hiểu');
@@ -3742,10 +3807,9 @@
         const chips = Array.from(root.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
         if (chips.length > 0 && cleanAns.includes(' ')) {
             chips.forEach(c => { delete c.dataset.kwClicked; });
-            const words = rawAns.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ''));
+            const words = rawAns.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9']/g, '')).filter(Boolean);
             let hits = 0;
             words.forEach(targetWord => {
-                if (!targetWord) return;
                 const matchedChip = chips.find(chip => {
                     const cText = (chip.innerText || chip.textContent || '').trim().toLowerCase().replace(/[^a-z0-9']/g, '');
                     return cText === targetWord && !chip.dataset.kwClicked;
@@ -3756,10 +3820,11 @@
                     hits++;
                 }
             });
-            if (hits > 0) {
+            if (words.length > 0 && hits >= words.length) {
                 IOE.toast('🧩 Đã sắp xếp câu!', 1200);
                 return true;
             }
+            return false;
         }
 
         // 2. Fill-in-the-blank input

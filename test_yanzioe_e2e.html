@@ -935,8 +935,74 @@
                 log('35. Live QuestDoanVanDienTu checks cc.Toggle blanks & Gemini vision attaches optionImageUrls',
                     cloze35Ok === true && checked35.join(',') === 'dates,admire' && geminiOptImgParts === 2 && optImgRes35?.answer === '[Image: cat.jpg]');
 
+                // Test 36: Prevent premature Submit when Game11 blocks are incomplete + recover from "Bạn chưa chọn hết các từ" popup
+                function Btn36(evs) { this.interactable = true; this.clickEvents = evs || []; }
+                let sub36Clicks = 0, tileClicks36 = [], freezeTile36 = false;
+                const makeTiles36 = (texts) => texts.map((txt, idx) => {
+                    const node = {
+                        name: `crossText_${idx}`, active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        _string: txt, children: [], convertToWorldSpaceAR: () => ({ x: 100 + idx * 140, y: 260 })
+                    };
+                    const ev = {
+                        emit() {
+                            tileClicks36.push(txt);
+                            if (!freezeTile36 || idx !== 3) node.opacity = 1;
+                        }
+                    };
+                    const btn = new Btn36([ev]);
+                    node._components = [btn];
+                    node.getComponent = (t) => (t === Btn36 || t === 'cc.Button') ? btn : null;
+                    return node;
+                });
+                const sub36Node = { name: 'btnSubmit', active: true, activeInHierarchy: true, visible: true, opacity: 255, _string: '', children: [], convertToWorldSpaceAR: () => ({ x: 880, y: 80 }) };
+                const sub36Btn = new Btn36([{ emit() { sub36Clicks++; } }]);
+                sub36Btn.node = sub36Node;
+                sub36Node._components = [sub36Btn];
+                sub36Node.getComponent = (t) => (t === Btn36 || t === 'cc.Button') ? sub36Btn : null;
+                const tiles36A = makeTiles36(['He thinks that', 'I ought to', 'get a job in', 'a big company', 'after university.']);
+                const gComp36A = { listText: tiles36A, listAnswer: [null, null, null, null, null], _enableClick: true };
+                const gp36A = { btnSubmit: sub36Btn, quest: gComp36A };
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: Btn36,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e]); } } },
+                    director: { getRunningScene: () => ({ active: true, activeInHierarchy: true, _components: [gp36A, gComp36A], children: [...tiles36A, sub36Node] }) }
+                };
+                const prevKey36 = window.IOE.featureConfigs.apiKey;
+                const prevFetch36 = window.fetch;
+                window.IOE.featureConfigs.apiKey = 'AIzaSyTestReorderGuard36';
+
+                // Case A: AI drops 2 blocks -> must abort BEFORE clicking any tile or Submit
+                window.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"answer":"He thinks that I ought to get a job in"}' }] } }] }) });
+                const res36A = await window.IOE.canvas.solveCocosWordReordering(window.cc.director.getRunningScene());
+                const blockedIncompleteA = (res36A === false && tileClicks36.length === 0 && sub36Clicks === 0);
+
+                // Case B: One tile refuses to fade (opacity stays 255) -> must NOT click btnSubmit after retry
+                window.IOE.state.solvedMeta.clear();
+                freezeTile36 = true;
+                tileClicks36 = []; sub36Clicks = 0;
+                window.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"answer":"He thinks that I ought to get a job in the city after university."}' }] } }] }) });
+                const res36B = await window.IOE.canvas.solveCocosWordReordering(window.cc.director.getRunningScene());
+                const heldSubmitOnUnplacedB = (res36B === false && tileClicks36.includes('a big company') && sub36Clicks === 0);
+
+                // Case C: Recover & dismiss "Bạn chưa chọn hết các từ" popup
+                let popupDismissed36 = false;
+                const okNode36 = { name: 'btnOk', active: true, activeInHierarchy: true, visible: true, opacity: 255, _string: 'OK', children: [], convertToWorldSpaceAR: () => ({ x: 500, y: 200 }) };
+                const okBtn36 = new Btn36([{ emit() { popupDismissed36 = true; } }]);
+                okNode36._components = [okBtn36];
+                okNode36.getComponent = (t) => (t === Btn36 || t === 'cc.Button') ? okBtn36 : null;
+                const warnMsg36 = { name: 'lblWarn', active: true, activeInHierarchy: true, visible: true, opacity: 255, _string: 'Bạn chưa chọn hết các từ', children: [], convertToWorldSpaceAR: () => ({ x: 500, y: 450 }) };
+                window.cc.director.getRunningScene = () => ({ active: true, activeInHierarchy: true, _components: [], children: [...tiles36A, sub36Node, warnMsg36, okNode36] });
+                const res36C = await window.IOE.canvas.solveCanvasGame();
+
+                window.fetch = prevFetch36;
+                window.IOE.featureConfigs.apiKey = prevKey36;
+                delete window.cc;
+                log('36. Blocks premature Submit on partial Game11 blocks/unplaced tiles & dismisses incomplete popup',
+                    blockedIncompleteA && heldSubmitOnUnplacedB && res36C === true && popupDismissed36);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 37;
+                const allPassed = failCount === 0 && passCount >= 38;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

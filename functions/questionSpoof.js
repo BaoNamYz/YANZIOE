@@ -490,7 +490,7 @@
         const isTrueFalse = cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o));
         let instruction = '';
         if (taskHint === 'reorder') {
-            instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
+            instruction = `Task: Reorder ALL ${cleanOpts.length} given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Use ALL ${cleanOpts.length} blocks verbatim; do NOT add, drop, or paraphrase any word.`;
         } else if (taskHint === 'pairs') {
             instruction = `Task: Match ALL ${cleanOpts.length} cards below into ${Math.floor(cleanOpts.length / 2)} exact pairs.\nCards:\n${cleanOpts.map((c, i) => `${i}: ${c}`).join('\n')}\nRules: Return ONLY raw JSON {"answer": [["card1", "card2"], ...]} with exact card texts.`;
         } else if (taskHint === 'blank' && mediaOpts?.maxInput > 0) {
@@ -948,6 +948,7 @@
             }
             if (obj.examKey && typeof obj.examKey === 'string' && obj.examKey !== IOE.state.currentExamKey) {
                 IOE.state.currentExamKey = obj.examKey;
+                IOE.state._visitedTabs = new Set();
                 const doingSec = Number(obj.timeDoing || 0);
                 IOE.state.examStartedAt = Date.now() - (doingSec > 0 ? doingSec * 1000 : 0);
             }

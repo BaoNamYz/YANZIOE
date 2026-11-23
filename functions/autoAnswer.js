@@ -207,10 +207,9 @@
         const chips = Array.from(root.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
         if (chips.length > 0 && cleanAns.includes(' ')) {
             chips.forEach(c => { delete c.dataset.kwClicked; });
-            const words = rawAns.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ''));
+            const words = rawAns.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9']/g, '')).filter(Boolean);
             let hits = 0;
             words.forEach(targetWord => {
-                if (!targetWord) return;
                 const matchedChip = chips.find(chip => {
                     const cText = (chip.innerText || chip.textContent || '').trim().toLowerCase().replace(/[^a-z0-9']/g, '');
                     return cText === targetWord && !chip.dataset.kwClicked;
@@ -221,10 +220,11 @@
                     hits++;
                 }
             });
-            if (hits > 0) {
+            if (words.length > 0 && hits >= words.length) {
                 IOE.toast('🧩 Đã sắp xếp câu!', 1200);
                 return true;
             }
+            return false;
         }
 
         // 2. Fill-in-the-blank input
