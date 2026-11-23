@@ -428,7 +428,7 @@
                                 <span style="font-size:17px;">🔐</span>
                                 <strong style="font-size:13.5px;color:#38bdf8;letter-spacing:0.4px;">YANZIOE VIP • BẢN QUYỀN</strong>
                             </div>
-                            <span style="background:#0284c7;color:#fff;font-size:10px;padding:2px 6px;border-radius:5px;font-weight:800;">v1.2.0</span>
+                            <span style="background:#0284c7;color:#fff;font-size:10px;padding:2px 6px;border-radius:5px;font-weight:800;">v${IOE.escHtml ? IOE.escHtml(IOE.version || '1.2.2') : (IOE.version || '1.2.2')}</span>
                         </div>
                         <div style="padding:14px 15px;">
                             <div style="font-size:11.5px;color:#cbd5e1;margin-bottom:8px;line-height:1.45;">

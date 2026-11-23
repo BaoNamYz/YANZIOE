@@ -100,7 +100,7 @@
             }
             if (Array.isArray(node._components)) {
                 for (const comp of node._components) {
-                    const s = comp?.string ?? comp?._string ?? comp?.text;
+                    const s = comp?.string ?? comp?._string ?? comp?.text ?? comp?.btnTxt ?? comp?.btnContent;
                     if (s && typeof s === 'string' && s.trim()) {
                         return s.replace(/<[^>]+>/g, '').trim();
                     }
@@ -250,46 +250,62 @@
                 try { node.activate(); } catch (e) {}
             }
 
-            if (typeof node.getComponent === 'function' && cc?.Button) {
-                const btn = node.getComponent(cc.Button);
-                if (btn && btn.interactable !== false) {
-                    btn._pressed = true;
-                    if (typeof btn._onTouchBegan === 'function') { try { btn._onTouchBegan(mockEvent); } catch (e) {} }
-                    if (Array.isArray(btn.clickEvents) && btn.clickEvents.length > 0) {
-                        for (const ev of btn.clickEvents) {
-                            if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);
+            let firedClickEvents = false;
+            let btnComp = null;
+            if (typeof node.getComponent === 'function') {
+                btnComp = (cc?.Button && node.getComponent(cc.Button)) || node.getComponent('cc.Button') || null;
+                if (btnComp && btnComp.interactable !== false) {
+                    btnComp._pressed = true;
+                    if (Array.isArray(btnComp.clickEvents) && btnComp.clickEvents.length > 0) {
+                        if (typeof cc?.Component?.EventHandler?.emitEvents === 'function') {
+                            try {
+                                cc.Component.EventHandler.emitEvents(btnComp.clickEvents, mockEvent);
+                                firedClickEvents = true;
+                            } catch (e) {}
+                        } else {
+                            for (const ev of btnComp.clickEvents) {
+                                if (typeof ev?.emit === 'function') {
+                                    try { ev.emit([mockEvent, ev.customEventData]); firedClickEvents = true; } catch (e) {}
+                                }
+                            }
                         }
                     }
-                    if (typeof btn._onTouchEnded === 'function') { try { btn._onTouchEnded(mockEvent); } catch (e) {} }
-                    btn._pressed = false;
+                    if (!firedClickEvents && typeof btnComp._onTouchEnded === 'function') {
+                        try { btnComp._onTouchEnded(mockEvent); firedClickEvents = true; } catch (e) {}
+                    }
+                    btnComp._pressed = false;
                 }
             }
 
-            if (cc?.eventManager && typeof cc.eventManager.dispatchEvent === 'function' && cc.EventTouch) {
-                try {
-                    const touchEvt = new cc.EventTouch([mockTouch]);
-                    touchEvt.setEventCode(cc.EventTouch.EventCode.BEGAN);
-                    cc.eventManager.dispatchEvent(touchEvt);
-                    touchEvt.setEventCode(cc.EventTouch.EventCode.ENDED);
-                    cc.eventManager.dispatchEvent(touchEvt);
-                } catch (e) {}
-            }
+            if (!firedClickEvents) {
+                if (cc?.eventManager && typeof cc.eventManager.dispatchEvent === 'function' && cc.EventTouch) {
+                    try {
+                        const touchEvt = new cc.EventTouch([mockTouch]);
+                        touchEvt.setEventCode(cc.EventTouch.EventCode.BEGAN);
+                        cc.eventManager.dispatchEvent(touchEvt);
+                        touchEvt.setEventCode(cc.EventTouch.EventCode.ENDED);
+                        cc.eventManager.dispatchEvent(touchEvt);
+                    } catch (e) {}
+                }
 
-            if (typeof node.emit === 'function') {
-                node.emit('touchstart', { ...mockEvent, type: 'touchstart' });
-                node.emit('touchend', mockEvent);
-                node.emit('click', mockEvent);
-            }
+                if (typeof node.emit === 'function') {
+                    node.emit('touchstart', { ...mockEvent, type: 'touchstart' });
+                    node.emit('touchend', mockEvent);
+                    node.emit('click', btnComp || mockEvent);
+                }
 
-            const canvas = getCanvasEl();
-            if (canvas) {
-                const rect = canvas.getBoundingClientRect();
-                const { width: canvasW, height: canvasH } = getLogicalCanvasSize();
-                const scaleX = rect.width / (canvasW || rect.width);
-                const scaleY = rect.height / (canvasH || rect.height);
-                const clientX = rect.left + (worldPos.x * scaleX);
-                const clientY = rect.bottom - (worldPos.y * scaleY);
-                dispatchCanvasClick(canvas, clientX, clientY);
+                const canvas = getCanvasEl();
+                if (canvas) {
+                    const rect = canvas.getBoundingClientRect();
+                    const { width: canvasW, height: canvasH } = getLogicalCanvasSize();
+                    const scaleX = rect.width / (canvasW || rect.width);
+                    const scaleY = rect.height / (canvasH || rect.height);
+                    const clientX = rect.left + (worldPos.x * scaleX);
+                    const clientY = rect.bottom - (worldPos.y * scaleY);
+                    dispatchCanvasClick(canvas, clientX, clientY);
+                }
+            } else if (typeof node.emit === 'function') {
+                node.emit('click', btnComp || mockEvent);
             }
             return true;
         } catch (e) {
@@ -557,24 +573,72 @@
     }
 
     /* ================= 3B. WORD REORDERING (COCOS2D) ================= */
+    function isAncestorNamed(node, pattern) {
+        let p = node?.parent || node?._parent;
+        let guard = 0;
+        while (p && guard++ < 12) {
+            if (pattern.test(String(p.name || ''))) return true;
+            p = p.parent || p._parent;
+        }
+        return false;
+    }
+
+    function inspectIoeGameComponents(scene) {
+        let gamePlayComp = null;
+        let reorderComp = null;
+        let textComp = null;
+        const seen = new WeakSet();
+        (function walk(n, d = 0) {
+            if (!n || d > 16 || seen.has(n) || !canTraverseNode(n)) return;
+            seen.add(n);
+            for (const c of (n._components || [])) {
+                if (!c) continue;
+                if (!gamePlayComp && (c.btnSubmit || c.quest)) gamePlayComp = c;
+                if (!reorderComp && Array.isArray(c.listText) && Array.isArray(c.listAnswer)) reorderComp = c;
+                if (!textComp && c.questionModel && Array.isArray(c.buttons)) textComp = c;
+            }
+            const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
+            for (const x of ch) walk(x, d + 1);
+        })(scene, 0);
+        return { gamePlayComp, reorderComp, textComp };
+    }
+
     async function solveCocosWordReordering(scene) {
         if (!scene) return false;
         try {
-            const clickables = findCocosClickables(scene);
-            const wordBlocks = [];
-            let answerBtn = null;
+            const { width: W, height: H } = getLogicalCanvasSize();
+            const { gamePlayComp, reorderComp } = inspectIoeGameComponents(scene);
+            if (reorderComp && reorderComp._enableClick === false) return false;
 
-            for (const c of clickables) {
-                const nl = (c.name || '').toLowerCase();
-                const t = (c.text || '').trim();
-                const tl = t.toLowerCase();
-                if (!t) continue;
-                if (nl.includes('submit') || tl === 'answer' || tl === 'trả lời' || tl === 'nộp bài') {
-                    answerBtn = c;
-                    continue;
+            const clickables = findCocosClickables(scene);
+            let wordBlocks = [];
+            let answerBtn = gamePlayComp?.btnSubmit ? { node: gamePlayComp.btnSubmit.node || gamePlayComp.btnSubmit, text: 'ANSWER', name: 'btnSubmit' } : null;
+
+            if (reorderComp && reorderComp.listText.length >= 4) {
+                for (const tileNode of reorderComp.listText) {
+                    if (!canTraverseNode(tileNode)) continue;
+                    if (typeof tileNode.opacity === 'number' && tileNode.opacity <= 8) continue;
+                    const txt = getNodeText(tileNode) || extractCocosTexts(tileNode, 4).map(x => x.text).join(' ');
+                    if (txt.trim()) {
+                        wordBlocks.push({ node: tileNode, text: txt.trim(), name: tileNode.name || '' });
+                    }
                 }
-                if (t.length > 0 && t.length < 48 && !/^(ok|start|close|back|reset|sound|skip|replay)$/i.test(tl) && !/^[A-D][.:)]/i.test(t)) {
-                    wordBlocks.push(c);
+            } else {
+                for (const c of clickables) {
+                    const nl = (c.name || '').toLowerCase();
+                    const t = (c.text || '').trim();
+                    const tl = t.toLowerCase();
+                    if (c.worldX > W * 0.72 && c.worldY > H * 0.65) continue;
+                    if (nl.includes('submit') || nl.includes('answer') || nl.includes('traloi') || tl === 'answer' || tl === 'trả lời' || tl === 'nộp bài') {
+                        if (!answerBtn) answerBtn = c;
+                        continue;
+                    }
+                    if (!t) continue;
+                    if (isAncestorNamed(c.node, /ctnAnwser|ctnAnswer|profile|header/i)) continue;
+                    if (typeof c.node?.opacity === 'number' && c.node.opacity <= 8) continue;
+                    if (t.length > 0 && t.length < 48 && !isHudChromeText(t) && !/^(ok|start|close|back|reset|sound|skip|replay|score|round:.*)$/i.test(tl) && !/^[A-D][.:)]/i.test(t)) {
+                        wordBlocks.push(c);
+                    }
                 }
             }
 
@@ -584,7 +648,10 @@
             if (looksLikeMC) return false;
 
             const words = wordBlocks.map(b => b.text.trim());
-            const texts = extractCocosTexts(scene).map(x => x.text).filter(t => !words.includes(t));
+            const texts = extractCocosTexts(scene)
+                .filter(x => !(x.worldX > W * 0.72 && x.worldY > H * 0.65))
+                .map(x => x.text.trim())
+                .filter(t => !words.includes(t) && !isHudChromeText(t) && !/^(id:|round:|score|\d+(\.\d+)?)$/i.test(t));
             const stem = texts.join(' ');
             const promptContext = `Arrange words: ${words.join(' | ')}${stem ? ' (' + stem + ')' : ''}`;
             const meta = await IOE.question?.solveQuestion(null, promptContext, words, 'reorder');
@@ -619,7 +686,7 @@
                 await clickCocosNode(block.node);
                 await IOE.delay?.(240);
             }
-            if (answerBtn) {
+            if (answerBtn?.node) {
                 await IOE.delay?.(320);
                 await clickCocosNode(answerBtn.node);
             }
@@ -778,27 +845,49 @@
             if (await solveCocosWordReordering(cocosScene)) return true;
 
             // 3. Multiple Choice / Fill-in-the-blank (separate prompt stem vs option buttons + image clues)
+            const { width: W, height: H } = getLogicalCanvasSize();
+            const { gamePlayComp, textComp } = inspectIoeGameComponents(cocosScene);
+            if (textComp && textComp.canClick === false) return false;
+
             const cocosTexts = extractCocosTexts(cocosScene);
-            if (cocosTexts.length > 0) {
-                const optBtns = clickables.filter(c => {
+            if (cocosTexts.length > 0 || textComp) {
+                let optBtns = clickables.filter(c => {
+                    if (c.worldX > W * 0.72 && c.worldY > H * 0.65) return false;
                     const t = (c.text || '').trim();
                     const nl = (c.name || '').toLowerCase();
                     return t && !isHudChromeText(t) && !/(submit|next|skip|close|sound|back|reset|hint)/.test(nl) &&
-                        !/^(nộp bài|trả lời|tiếp tục|bỏ qua|nghe lại|submit|next|ok|start)$/i.test(t);
+                        !/^(nộp bài|trả lời|tiếp tục|bỏ qua|nghe lại|submit|next|ok|start|answer|score)$/i.test(t);
                 });
+                if (textComp?.buttons?.length) {
+                    const compBtns = textComp.buttons
+                        .filter(b => b?.node && canTraverseNode(b.node) && b.btnIdx !== 6 && (b.btnTxt || b.btnContent || getNodeText(b.node)))
+                        .map(b => ({
+                            node: b.node,
+                            text: String(b.btnTxt || b.btnContent || getNodeText(b.node)).replace(/<[^>]+>/g, '').trim(),
+                            btnComp: b,
+                            name: b.node.name || ''
+                        }))
+                        .filter(b => b.text);
+                    if (compBtns.length >= 2) optBtns = compBtns;
+                }
+
                 const optSet = new Set(optBtns.map(b => b.text.trim()));
                 const stemTexts = cocosTexts
+                    .filter(x => !(x.worldX > W * 0.72 && x.worldY > H * 0.65))
                     .map(x => x.text.trim())
-                    .filter(t => !isHudChromeText(t) && !optSet.has(t));
+                    .filter(t => !isHudChromeText(t) && !optSet.has(t) && !/^(id:|round:|score|\d+(\.\d+)?)$/i.test(t));
 
                 const spriteClues = extractSceneSpriteClues(cocosScene);
-                let qPrompt = stemTexts.join(' ').trim() || cocosTexts.map(x => x.text).join(' ').trim();
+                const modelText = [textComp?.questionModel?.questionDescription?.content, textComp?.questionModel?.questionContent?.content]
+                    .filter(Boolean).join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                let qPrompt = modelText || stemTexts.join(' ').trim() || cocosTexts.map(x => x.text).join(' ').trim();
                 if (spriteClues.length > 0) {
                     qPrompt += ` [Image hints: ${spriteClues.slice(0, 5).join(', ')}]`;
                 }
 
+                const qId = textComp?.questionModel?.questionId ?? null;
                 const optStrings = optBtns.map(b => b.text);
-                const meta = await IOE.question?.solveQuestion(null, qPrompt, optStrings);
+                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings);
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
 
@@ -821,14 +910,20 @@
                                 eb.comp.string = ansStr;
                                 if (eb.comp._impl?._elem) setDomInputValue(eb.comp._impl._elem, ansStr);
                                 if (typeof eb.comp._updateStringLabel === 'function') eb.comp._updateStringLabel();
-                                eb.node.emit?.('editing-did-ended', eb.comp);
+                                if (cc?.Component?.EventHandler?.emitEvents) {
+                                    if (Array.isArray(eb.comp.textChanged)) cc.Component.EventHandler.emitEvents(eb.comp.textChanged, ansStr, eb.comp);
+                                    if (Array.isArray(eb.comp.editingDidEnded)) cc.Component.EventHandler.emitEvents(eb.comp.editingDidEnded, eb.comp);
+                                }
                                 eb.node.emit?.('text-changed', eb.comp);
+                                eb.node.emit?.('editing-did-ended', eb.comp);
                             }
                             IOE.toast(`✍️ Đã điền EditBox: ${ansStr}`, 1400);
-                            const submitBtn = clickables.find(c => /(submit|trả lời|nộp bài|xác nhận|ok|next)/i.test(c.text + ' ' + c.name));
-                            if (submitBtn) {
+                            const submitNode = gamePlayComp?.btnSubmit?.node || gamePlayComp?.btnSubmit ||
+                                textComp?.buttons?.find?.(b => b.btnIdx === 6)?.node ||
+                                clickables.find(c => /(submit|answer|trả lời|nộp bài|xác nhận|ok|next)/i.test(c.text + ' ' + c.name))?.node;
+                            if (submitNode) {
                                 await IOE.delay?.(250);
-                                await clickCocosNode(submitBtn.node);
+                                await clickCocosNode(submitNode);
                             }
                             return true;
                         }

@@ -206,7 +206,7 @@
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.2.0</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v${IOE.escHtml(IOE.version || '1.2.2')}</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -335,7 +335,7 @@
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.1')} (Licensed).</div>
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.2')} (Licensed).</div>
                     <div style="display:flex;gap:5px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
                         <button id="yanz-btn-debug" style="flex:1;background:#4f46e5;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">🔍 Soi trang</button>
@@ -345,7 +345,7 @@
             </div>
 
             <div id="yanzioe-pill" style="display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;">
-                🌐 YANZIOE v${IOE.escHtml(IOE.version || '1.2.1')}
+                🌐 YANZIOE v${IOE.escHtml(IOE.version || '1.2.2')}
             </div>
         `;
 

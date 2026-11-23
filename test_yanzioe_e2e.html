@@ -405,8 +405,121 @@
                 reactHost.remove();
                 log('26. Structural DOM fallback detects modern React exam cards without .question-content', domSolved === true);
 
+                // Test 27: Live IOE Cocos Creator Game11 + GamePlay (e.target required, EventHandler.emitEvents single-fire, Sprite btnSubmit)
+                const g11Order = [];
+                let g11Submitted = '';
+                let g11FireCounts = 0;
+                function G11MockBtn(evs) { this.interactable = true; this.clickEvents = evs || []; }
+                const g11Tiles = ['could not be', 'the train', 'seen any more.', 'waving until', 'We continued'].map((txt, idx) => {
+                    const node = {
+                        name: `crossText_${idx}`, active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        _string: txt, children: [], convertToWorldSpaceAR: () => ({ x: 100 + idx * 140, y: 260 })
+                    };
+                    const ev = {
+                        customEventData: '',
+                        emit(args) {
+                            const e = args?.[0];
+                            g11FireCounts++;
+                            if (!e || e.target !== node) throw new TypeError('Cannot read properties of undefined (reading opacity)');
+                            if (node.opacity < 255) return;
+                            node.opacity = 1;
+                            g11Order.push(txt);
+                        }
+                    };
+                    const btn = new G11MockBtn([ev]);
+                    node._components = [btn];
+                    node.getComponent = (t) => (t === window.cc.Button || t === 'cc.Button') ? btn : null;
+                    return node;
+                });
+                const g11SubmitNode = {
+                    name: 'Button', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                    _string: '', children: [], convertToWorldSpaceAR: () => ({ x: 880, y: 80 })
+                };
+                const g11SubmitBtn = new G11MockBtn([{ customEventData: '', emit() { g11Submitted = g11Order.join(' '); } }]);
+                g11SubmitNode._components = [g11SubmitBtn];
+                g11SubmitNode.getComponent = (t) => (t === window.cc.Button || t === 'cc.Button') ? g11SubmitBtn : null;
+                const g11Comp = { listText: g11Tiles, listAnswer: [null, null, null, null, null], _enableClick: true };
+                const gPlayComp = { btnSubmit: g11SubmitBtn, quest: g11Comp };
+                g11SubmitBtn.node = g11SubmitNode;
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: G11MockBtn,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e, ev.customEventData]); } } },
+                    director: {
+                        getRunningScene: () => ({
+                            active: true, activeInHierarchy: true,
+                            _components: [gPlayComp, g11Comp],
+                            children: [...g11Tiles, g11SubmitNode]
+                        })
+                    }
+                };
+                const prevG11Key = window.IOE.featureConfigs.apiKey;
+                const prevG11Fetch = window.fetch;
+                window.IOE.featureConfigs.apiKey = 'AIzaSyFakeKeyForTest27';
+                window.fetch = async () => ({
+                    ok: true, status: 200,
+                    text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"answer":"We continued waving until the train could not be seen any more."}' }] } }] })
+                });
+                const g11Ok = await window.IOE.canvas.solveCocosWordReordering(window.cc.director.getRunningScene());
+                window.fetch = prevG11Fetch;
+                window.IOE.featureConfigs.apiKey = prevG11Key;
+                delete window.cc;
+                log('27. Live Game11 Cocos Creator word-reordering passes e.target, avoids double-fire, & clicks Sprite btnSubmit',
+                    g11Ok === true && g11FireCounts === 5 && g11Submitted === 'We continued waving until the train could not be seen any more.');
+
+                // Test 28: Live IOE Cocos Creator TextContent + AnswerButton (e.currentTarget.getComponent(AnswerButton) & btnTxt)
+                let tcPicked = '';
+                function MockAnswerButton(txt, evs) {
+                    this.interactable = true; this.btnTxt = txt; this.btnContent = txt; this.btnIdx = 1; this.clickEvents = evs || [];
+                }
+                const tcButtons = ['beautifull', 'beautiful', 'beautifuly'].map((txt, idx) => {
+                    const node = {
+                        name: `btnChoice_${idx}`, active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        children: [], convertToWorldSpaceAR: () => ({ x: 400, y: 400 - idx * 70 })
+                    };
+                    const ev = {
+                        customEventData: '',
+                        emit(args) {
+                            const e = args?.[0];
+                            const ab = e?.currentTarget?.getComponent?.('cc.Button');
+                            if (!ab) throw new TypeError('e.currentTarget.getComponent failed');
+                            tcPicked = ab.btnTxt;
+                        }
+                    };
+                    const ab = new MockAnswerButton(txt, [ev]);
+                    ab.node = node;
+                    node._components = [ab];
+                    node.getComponent = () => ab;
+                    return ab;
+                });
+                const tcComp = {
+                    canClick: true,
+                    buttons: tcButtons,
+                    questionModel: {
+                        questionId: 'q_tc_live_28',
+                        questionDescription: { content: 'Choose the correct word:' },
+                        questionContent: { content: 'She looks ______ today.' }
+                    }
+                };
+                window.IOE.state.correctAnswers.set('q_tc_live_28', 'beautiful');
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: MockAnswerButton,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e, ev.customEventData]); } } },
+                    director: {
+                        getRunningScene: () => ({
+                            active: true, activeInHierarchy: true,
+                            _components: [tcComp],
+                            children: tcButtons.map(b => b.node)
+                        })
+                    }
+                };
+                const tcOk = await window.IOE.canvas.solveCanvasGame();
+                delete window.cc;
+                log('28. Live TextContent + AnswerButton passes e.currentTarget & selects "beautiful"', tcOk === true && tcPicked === 'beautiful');
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 28;
+                const allPassed = failCount === 0 && passCount >= 30;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

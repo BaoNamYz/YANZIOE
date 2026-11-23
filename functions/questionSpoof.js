@@ -705,7 +705,7 @@
         }
         let strAns = extractAnswerString(rawAns);
 
-        const optArr = qObj.ans ?? qObj.Ans ?? qObj.options ?? qObj.Options ?? qObj.listAnswer ?? qObj.ListAnswer ?? qObj.answers ?? qObj.Answers;
+        const optArr = qObj.ans ?? qObj.Ans ?? qObj.answearArr ?? qObj.options ?? qObj.Options ?? qObj.listAnswer ?? qObj.ListAnswer ?? qObj.answers ?? qObj.Answers;
         if (Array.isArray(optArr) && optArr.length > 0) {
             if (strAns && /^\d+$/.test(strAns.trim())) {
                 const nIdx = parseInt(strAns.trim(), 10);
@@ -908,13 +908,7 @@
                                 if (comp[fld] && parsePacket(comp[fld])) extracted = true;
                             }
                             if (Array.isArray(comp.listQuestion) && parsePacket(comp.listQuestion)) extracted = true;
-                            if (Array.isArray(comp.data?.answearArr)) {
-                                const fullStr = comp.data.answearArr.map(x => (typeof x === 'object' ? (x.content || '') : String(x))).join(' ').trim();
-                                if (fullStr && isValidClozeWord(fullStr)) {
-                                    IOE.state.correctAnswers.set('game11_full', fullStr);
-                                    extracted = true;
-                                }
-                            }
+                            if (comp.data && comp.data !== comp && parsePacket(comp.data)) extracted = true;
                         }
                         const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
                         for (const ch of children) inspectNode(ch, depth + 1);
