@@ -36,8 +36,9 @@
     function computeStepDelay() {
         const mode = IOE.featureConfigs?.questionMode || 'stealth';
         if (mode === 'turbo') return 220;
-        const base = Number(IOE.featureConfigs?.autoDelay || 1400);
-        return Math.round(base * (0.78 + Math.random() * 0.44));
+        const cfgDelay = Number(IOE.featureConfigs?.autoDelay || 3000);
+        const floor = IOE.features?.humanPacing !== false ? Math.max(cfgDelay, 2600) : cfgDelay;
+        return Math.round(floor * (0.85 + Math.random() * 0.40));
     }
 
     let isProcessing = false;
@@ -105,7 +106,8 @@
     }
 
     async function stepOnce(forceRun = false) {
-        if (isProcessing && (Date.now() - processingStartedAt < 18000)) return false;
+        const lastAlive = Math.max(processingStartedAt, IOE.state?.lastPacingHeartbeat || 0);
+        if (isProcessing && (Date.now() - lastAlive < 25000)) return false;
         if (!forceRun && !IOE.features?.autoAnswer) return false;
         if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
         isProcessing = true;

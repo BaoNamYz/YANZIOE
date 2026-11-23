@@ -1,5 +1,5 @@
-/* YANZIOE VIP v1.2.5 CoKey (YanzBn License + Hybrid CAS & AI Solver) */
-/* YANZIOE VIP v1.2.5 */
+/* YANZIOE VIP v1.2.6 CoKey (YanzBn License + Hybrid CAS & AI Solver) */
+/* YANZIOE VIP v1.2.6 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     if (_w.__YANZIOE_BOOTED__) return;
@@ -168,13 +168,75 @@
         document.documentElement.dataset.ioeMainLoaded = '1';
     }
 
+    function isHumanPacingActive() {
+        if (IOE.state?._forcePacingForTest) return true;
+        if (IOE.features?.humanPacing === false) return false;
+        if (IOE.featureConfigs?.questionMode === 'turbo') return false;
+        try {
+            if (typeof location !== 'undefined' && !String(location.protocol || '').startsWith('http')) return false;
+        } catch (e) {}
+        return true;
+    }
+
+    function getMinExamSeconds(totalItems = 10) {
+        let srv = Number(IOE.state?.serverTimeAuto || 0);
+        try {
+            if (!srv && typeof win.__require === 'function') {
+                const cd = win.__require('ClientData');
+                const am = cd?.default?.AppModel || cd?.AppModel;
+                if (am?.timeAuto > 0) srv = Number(am.timeAuto);
+            }
+        } catch (e) {}
+        const n = Math.max(1, Number(totalItems || 10));
+        const defaultFloor = Math.min(Math.max(34, Math.round(n * 4.5)), 95);
+        return Math.max(srv > 0 ? (srv + 5) : 0, defaultFloor);
+    }
+
+    async function waitUntilMinElapsed(targetMinSec, label = 'tránh quét tốc độ') {
+        if (!isHumanPacingActive()) return 0;
+        const started = Number(IOE.state?.examStartedAt || Date.now());
+        let slept = 0;
+        while (isHumanPacingActive()) {
+            const elapsedSec = (Date.now() - started) / 1000;
+            const remain = Math.ceil(targetMinSec - elapsedSec);
+            if (remain <= 0) break;
+            IOE.state.lastPacingHeartbeat = Date.now();
+            if (slept === 0 || remain % 4 === 0) {
+                toast(`🛡️ Chờ thời gian ${label} tự nhiên (còn ${remain}s)...`, 3200);
+            }
+            const step = Math.min(1000, remain * 1000);
+            await delay(step);
+            slept += step;
+            if (slept > 120000) break;
+        }
+        return slept;
+    }
+
+    async function waitQuestionReadTime(minMs = 2600, hasAudio = false) {
+        if (!isHumanPacingActive()) return 0;
+        const floor = hasAudio ? Math.max(minMs, 4200) : minMs;
+        const started = Number(IOE.state?.questStartedAt || Date.now());
+        const need = floor - (Date.now() - started);
+        if (need <= 0) return 0;
+        const waitMs = Math.min(need + Math.floor(Math.random() * 750), 9000);
+        IOE.state.lastPacingHeartbeat = Date.now();
+        await delay(waitMs);
+        return waitMs;
+    }
+
     const ioeState = {
-        version: '1.2.5',
+        version: '1.2.6',
         events,
         toast,
         delay,
         escHtml,
         onBodyReady,
+        pacing: {
+            isHumanPacingActive,
+            getMinExamSeconds,
+            waitUntilMinElapsed,
+            waitQuestionReadTime
+        },
         timers: {
             setInterval: nativeSetInterval,
             clearInterval: nativeClearInterval,
@@ -188,6 +250,13 @@
             currentQuestionId: null,
             packetHits: 0,
             lastEngine: 'Đang quét...',
+            examStartedAt: Date.now(),
+            serverTimeAuto: 0,
+            totalExamQuestions: 10,
+            currentExamKey: '',
+            currentQuestKey: '',
+            questStartedAt: Date.now(),
+            lastPacingHeartbeat: 0,
             questions: new Map(),
             solvedMeta: new Map(),
             correctAnswers: new Map(),
@@ -197,6 +266,7 @@
             autoAnswer: true,
             showAnswers: true,
             canvasMode: true,
+            humanPacing: true,
             streamMode: false,
             oneko: false,
             rgbLogo: true,
@@ -212,7 +282,7 @@
                 return '';
             })(),
             aiProvider: 'gemini',
-            autoDelay: 1400,
+            autoDelay: 3000,
             questionMode: 'stealth'
         }
     };
@@ -1787,6 +1857,19 @@
             if (visited.has(obj)) return;
             visited.add(obj);
 
+            if (typeof obj.timeAuto === 'number' && obj.timeAuto > 0) {
+                IOE.state.serverTimeAuto = obj.timeAuto;
+            }
+            if (obj.examKey && typeof obj.examKey === 'string' && obj.examKey !== IOE.state.currentExamKey) {
+                IOE.state.currentExamKey = obj.examKey;
+                const doingSec = Number(obj.timeDoing || 0);
+                IOE.state.examStartedAt = Date.now() - (doingSec > 0 ? doingSec * 1000 : 0);
+            }
+            const qListRef = obj.question || obj.questionArr;
+            if (Array.isArray(qListRef) && qListRef.length > 0) {
+                IOE.state.totalExamQuestions = qListRef.length;
+            }
+
             if (storeQuestionAnswer(obj)) foundCount++;
 
             // Explicit Cloze-style answear/ans arrays with positions
@@ -1916,6 +1999,11 @@
                         if (rootObj) {
                             if (parsePacket(rootObj)) extracted = true;
                             const appModel = rootObj.AppModel || rootObj;
+                            if (appModel?.timeAuto > 0) IOE.state.serverTimeAuto = Number(appModel.timeAuto);
+                            if (appModel?.timeClientMiliSec > 0 && appModel?.game?.examKey !== IOE.state.currentExamKey) {
+                                IOE.state.examStartedAt = Number(appModel.timeClientMiliSec);
+                                if (appModel?.game?.examKey) IOE.state.currentExamKey = appModel.game.examKey;
+                            }
                             if (appModel?.game && parsePacket(appModel.game)) extracted = true;
                         }
                     } catch (e) {}
@@ -2679,9 +2767,23 @@
 
             if (pairsToClick.length === 0) return false;
             IOE.state.lastEngine = 'Cocos2d (Ghép Cặp)';
+            const pacingOn = IOE.pacing?.isHumanPacingActive?.();
+            const totalPairs = Math.max(qList.length || 0, pairsToClick.length);
             let solvedPairs = 0;
-            for (const [n1, n2, label] of pairsToClick) {
+            for (let idx = 0; idx < pairsToClick.length; idx++) {
+                const [n1, n2, label] = pairsToClick[idx];
                 if (rootGame?.isEndGame) break;
+                if (pacingOn) {
+                    if (idx === 0) {
+                        await IOE.delay?.(1800 + Math.floor(Math.random() * 900));
+                    } else {
+                        IOE.state.lastPacingHeartbeat = Date.now();
+                        await IOE.delay?.(2400 + Math.floor(Math.random() * 1400));
+                    }
+                    if (idx === pairsToClick.length - 1 && IOE.pacing?.waitUntilMinElapsed) {
+                        await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalPairs), 'đọc bài Ghép Cặp');
+                    }
+                }
                 let waitMs = 0;
                 while (matchComp.mask?.active && waitMs < 4000) {
                     await IOE.delay?.(80);
@@ -2690,11 +2792,11 @@
                 if (typeof n1.opacity === 'number' && n1.opacity <= 8) continue;
                 if (typeof n2.opacity === 'number' && n2.opacity <= 8) continue;
                 await clickCocosNode(n1);
-                await IOE.delay?.(160);
+                await IOE.delay?.(pacingOn ? (380 + Math.floor(Math.random() * 260)) : 160);
                 await clickCocosNode(n2);
                 solvedPairs++;
-                IOE.toast(`🧩 Ghép cặp (${solvedPairs}/${pairsToClick.length}): ${label}`, 1100);
-                await IOE.delay?.(260);
+                IOE.toast(`🧩 Ghép cặp (${solvedPairs}/${pairsToClick.length}): ${label}`, 1200);
+                await IOE.delay?.(pacingOn ? 450 : 260);
             }
             return solvedPairs > 0;
         } catch (e) {
@@ -2783,9 +2885,22 @@
             }
 
             if (clickOrder.length < 3) return false;
+            const totalReorderQ = IOE.state?.totalExamQuestions || gamePlayComp?.quest?.data?.questionArr?.length || 10;
+            const curKey = `${promptContext.slice(0, 48)}`;
+            if (IOE.state.currentQuestKey !== curKey) {
+                IOE.state.currentQuestKey = curKey;
+                IOE.state.questStartedAt = Date.now();
+            }
+            const pacingOn = IOE.pacing?.isHumanPacingActive?.();
             for (const block of clickOrder) {
                 await clickCocosNode(block.node);
-                await IOE.delay?.(240);
+                await IOE.delay?.(pacingOn ? (340 + Math.floor(Math.random() * 220)) : 240);
+            }
+            if (pacingOn && IOE.pacing?.waitQuestionReadTime) {
+                await IOE.pacing.waitQuestionReadTime(3000, false);
+                if (typeof gamePlayComp?.currentQuestIdx === 'number' && gamePlayComp.currentQuestIdx >= totalReorderQ - 1 && IOE.pacing?.waitUntilMinElapsed) {
+                    await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalReorderQ), 'nộp bài cuối');
+                }
             }
             if (answerBtn?.node) {
                 await IOE.delay?.(320);
@@ -3002,10 +3117,23 @@
                 const maxInput = Number(contPart?.maxInput || 0);
 
                 const qId = qModel?.questionId ?? null;
+                const qKey = String(qId || qPrompt.slice(0, 60));
+                if (IOE.state.currentQuestKey !== qKey) {
+                    IOE.state.currentQuestKey = qKey;
+                    IOE.state.questStartedAt = Date.now();
+                }
                 const optStrings = optBtns.map(b => b.text);
                 const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings, maxInput > 0 ? 'blank' : '', { audioUrl, imageUrl, maxInput });
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
+                    if (IOE.pacing?.isHumanPacingActive?.()) {
+                        await IOE.pacing.waitQuestionReadTime(2800, !!audioUrl);
+                        const totalQ = Number(IOE.state?.totalExamQuestions || 10);
+                        const curNum = Number(textComp?.currentQuestionNumber || (typeof gamePlayComp?.currentQuestIdx === 'number' ? gamePlayComp.currentQuestIdx + 1 : 0));
+                        if (curNum > 0 && curNum >= totalQ && IOE.pacing?.waitUntilMinElapsed) {
+                            await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalQ), audioUrl ? 'nghe kỹ bài cuối' : 'đọc kỹ câu cuối');
+                        }
+                    }
 
                     // a0. Native IOE ContentComponent fill-in-the-blank (inputTxt + maxInput + btnIdx 6)
                     if (maxInput > 0 && typeof textComp?.inputTxt === 'string') {
@@ -3291,8 +3419,9 @@
     function computeStepDelay() {
         const mode = IOE.featureConfigs?.questionMode || 'stealth';
         if (mode === 'turbo') return 220;
-        const base = Number(IOE.featureConfigs?.autoDelay || 1400);
-        return Math.round(base * (0.78 + Math.random() * 0.44));
+        const cfgDelay = Number(IOE.featureConfigs?.autoDelay || 3000);
+        const floor = IOE.features?.humanPacing !== false ? Math.max(cfgDelay, 2600) : cfgDelay;
+        return Math.round(floor * (0.85 + Math.random() * 0.40));
     }
 
     let isProcessing = false;
@@ -3360,7 +3489,8 @@
     }
 
     async function stepOnce(forceRun = false) {
-        if (isProcessing && (Date.now() - processingStartedAt < 18000)) return false;
+        const lastAlive = Math.max(processingStartedAt, IOE.state?.lastPacingHeartbeat || 0);
+        if (isProcessing && (Date.now() - lastAlive < 25000)) return false;
         if (!forceRun && !IOE.features?.autoAnswer) return false;
         if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
         isProcessing = true;
@@ -3803,6 +3933,10 @@
                         <input type="checkbox" id="yanz-chk-freeze" ${IOE.features.freezeTimer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
+                        <span>🛡️ Chống quét tốc độ (Human Delay)</span>
+                        <input type="checkbox" id="yanz-chk-pacing" ${IOE.features.humanPacing !== false ? 'checked' : ''}>
+                    </label>
+                    <label class="yanz-toggle-row">
                         <span>Mèo cưng Oneko dạo bước</span>
                         <input type="checkbox" id="yanz-chk-oneko" ${IOE.features.oneko ? 'checked' : ''}>
                     </label>
@@ -3928,6 +4062,7 @@
                 ['yanz-chk-show', 'showAnswers'],
                 ['yanz-chk-canvas', 'canvasMode'],
                 ['yanz-chk-freeze', 'freezeTimer'],
+                ['yanz-chk-pacing', 'humanPacing'],
                 ['yanz-chk-oneko', 'oneko'],
                 ['yanz-chk-stream', 'streamMode']
             ];
@@ -4085,6 +4220,10 @@
         document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {
             IOE.features.freezeTimer = e.target.checked; saveAllConfigs();
             IOE.toast(e.target.checked ? '❄️ Đóng băng giờ: BẬT' : '⏱ Đóng băng giờ: TẮT', 1100);
+        });
+        document.getElementById('yanz-chk-pacing')?.addEventListener('change', (e) => {
+            IOE.features.humanPacing = e.target.checked; saveAllConfigs();
+            IOE.toast(e.target.checked ? '🛡️ Chống quét tốc độ: BẬT' : '⚡ Tắt delay tự nhiên (cẩn thận bị quét)', 1400);
         });
         document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {
             IOE.features.oneko = e.target.checked; saveAllConfigs();

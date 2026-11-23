@@ -934,6 +934,19 @@
             if (visited.has(obj)) return;
             visited.add(obj);
 
+            if (typeof obj.timeAuto === 'number' && obj.timeAuto > 0) {
+                IOE.state.serverTimeAuto = obj.timeAuto;
+            }
+            if (obj.examKey && typeof obj.examKey === 'string' && obj.examKey !== IOE.state.currentExamKey) {
+                IOE.state.currentExamKey = obj.examKey;
+                const doingSec = Number(obj.timeDoing || 0);
+                IOE.state.examStartedAt = Date.now() - (doingSec > 0 ? doingSec * 1000 : 0);
+            }
+            const qListRef = obj.question || obj.questionArr;
+            if (Array.isArray(qListRef) && qListRef.length > 0) {
+                IOE.state.totalExamQuestions = qListRef.length;
+            }
+
             if (storeQuestionAnswer(obj)) foundCount++;
 
             // Explicit Cloze-style answear/ans arrays with positions
@@ -1063,6 +1076,11 @@
                         if (rootObj) {
                             if (parsePacket(rootObj)) extracted = true;
                             const appModel = rootObj.AppModel || rootObj;
+                            if (appModel?.timeAuto > 0) IOE.state.serverTimeAuto = Number(appModel.timeAuto);
+                            if (appModel?.timeClientMiliSec > 0 && appModel?.game?.examKey !== IOE.state.currentExamKey) {
+                                IOE.state.examStartedAt = Number(appModel.timeClientMiliSec);
+                                if (appModel?.game?.examKey) IOE.state.currentExamKey = appModel.game.examKey;
+                            }
                             if (appModel?.game && parsePacket(appModel.game)) extracted = true;
                         }
                     } catch (e) {}

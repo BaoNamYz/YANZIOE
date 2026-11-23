@@ -161,13 +161,75 @@
         document.documentElement.dataset.ioeMainLoaded = '1';
     }
 
+    function isHumanPacingActive() {
+        if (IOE.state?._forcePacingForTest) return true;
+        if (IOE.features?.humanPacing === false) return false;
+        if (IOE.featureConfigs?.questionMode === 'turbo') return false;
+        try {
+            if (typeof location !== 'undefined' && !String(location.protocol || '').startsWith('http')) return false;
+        } catch (e) {}
+        return true;
+    }
+
+    function getMinExamSeconds(totalItems = 10) {
+        let srv = Number(IOE.state?.serverTimeAuto || 0);
+        try {
+            if (!srv && typeof win.__require === 'function') {
+                const cd = win.__require('ClientData');
+                const am = cd?.default?.AppModel || cd?.AppModel;
+                if (am?.timeAuto > 0) srv = Number(am.timeAuto);
+            }
+        } catch (e) {}
+        const n = Math.max(1, Number(totalItems || 10));
+        const defaultFloor = Math.min(Math.max(34, Math.round(n * 4.5)), 95);
+        return Math.max(srv > 0 ? (srv + 5) : 0, defaultFloor);
+    }
+
+    async function waitUntilMinElapsed(targetMinSec, label = 'tránh quét tốc độ') {
+        if (!isHumanPacingActive()) return 0;
+        const started = Number(IOE.state?.examStartedAt || Date.now());
+        let slept = 0;
+        while (isHumanPacingActive()) {
+            const elapsedSec = (Date.now() - started) / 1000;
+            const remain = Math.ceil(targetMinSec - elapsedSec);
+            if (remain <= 0) break;
+            IOE.state.lastPacingHeartbeat = Date.now();
+            if (slept === 0 || remain % 4 === 0) {
+                toast(`🛡️ Chờ thời gian ${label} tự nhiên (còn ${remain}s)...`, 3200);
+            }
+            const step = Math.min(1000, remain * 1000);
+            await delay(step);
+            slept += step;
+            if (slept > 120000) break;
+        }
+        return slept;
+    }
+
+    async function waitQuestionReadTime(minMs = 2600, hasAudio = false) {
+        if (!isHumanPacingActive()) return 0;
+        const floor = hasAudio ? Math.max(minMs, 4200) : minMs;
+        const started = Number(IOE.state?.questStartedAt || Date.now());
+        const need = floor - (Date.now() - started);
+        if (need <= 0) return 0;
+        const waitMs = Math.min(need + Math.floor(Math.random() * 750), 9000);
+        IOE.state.lastPacingHeartbeat = Date.now();
+        await delay(waitMs);
+        return waitMs;
+    }
+
     const ioeState = {
-        version: '1.2.5',
+        version: '1.2.6',
         events,
         toast,
         delay,
         escHtml,
         onBodyReady,
+        pacing: {
+            isHumanPacingActive,
+            getMinExamSeconds,
+            waitUntilMinElapsed,
+            waitQuestionReadTime
+        },
         timers: {
             setInterval: nativeSetInterval,
             clearInterval: nativeClearInterval,
@@ -181,6 +243,13 @@
             currentQuestionId: null,
             packetHits: 0,
             lastEngine: 'Đang quét...',
+            examStartedAt: Date.now(),
+            serverTimeAuto: 0,
+            totalExamQuestions: 10,
+            currentExamKey: '',
+            currentQuestKey: '',
+            questStartedAt: Date.now(),
+            lastPacingHeartbeat: 0,
             questions: new Map(),
             solvedMeta: new Map(),
             correctAnswers: new Map(),
@@ -190,6 +259,7 @@
             autoAnswer: true,
             showAnswers: true,
             canvasMode: true,
+            humanPacing: true,
             streamMode: false,
             oneko: false,
             rgbLogo: true,
@@ -205,7 +275,7 @@
                 return '';
             })(),
             aiProvider: 'gemini',
-            autoDelay: 1400,
+            autoDelay: 3000,
             questionMode: 'stealth'
         }
     };

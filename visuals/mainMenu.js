@@ -245,6 +245,10 @@
                         <input type="checkbox" id="yanz-chk-freeze" ${IOE.features.freezeTimer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
+                        <span>🛡️ Chống quét tốc độ (Human Delay)</span>
+                        <input type="checkbox" id="yanz-chk-pacing" ${IOE.features.humanPacing !== false ? 'checked' : ''}>
+                    </label>
+                    <label class="yanz-toggle-row">
                         <span>Mèo cưng Oneko dạo bước</span>
                         <input type="checkbox" id="yanz-chk-oneko" ${IOE.features.oneko ? 'checked' : ''}>
                     </label>
@@ -370,6 +374,7 @@
                 ['yanz-chk-show', 'showAnswers'],
                 ['yanz-chk-canvas', 'canvasMode'],
                 ['yanz-chk-freeze', 'freezeTimer'],
+                ['yanz-chk-pacing', 'humanPacing'],
                 ['yanz-chk-oneko', 'oneko'],
                 ['yanz-chk-stream', 'streamMode']
             ];
@@ -527,6 +532,10 @@
         document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {
             IOE.features.freezeTimer = e.target.checked; saveAllConfigs();
             IOE.toast(e.target.checked ? '❄️ Đóng băng giờ: BẬT' : '⏱ Đóng băng giờ: TẮT', 1100);
+        });
+        document.getElementById('yanz-chk-pacing')?.addEventListener('change', (e) => {
+            IOE.features.humanPacing = e.target.checked; saveAllConfigs();
+            IOE.toast(e.target.checked ? '🛡️ Chống quét tốc độ: BẬT' : '⚡ Tắt delay tự nhiên (cẩn thận bị quét)', 1400);
         });
         document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {
             IOE.features.oneko = e.target.checked; saveAllConfigs();

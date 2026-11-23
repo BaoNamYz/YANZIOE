@@ -694,9 +694,23 @@
 
             if (pairsToClick.length === 0) return false;
             IOE.state.lastEngine = 'Cocos2d (Ghép Cặp)';
+            const pacingOn = IOE.pacing?.isHumanPacingActive?.();
+            const totalPairs = Math.max(qList.length || 0, pairsToClick.length);
             let solvedPairs = 0;
-            for (const [n1, n2, label] of pairsToClick) {
+            for (let idx = 0; idx < pairsToClick.length; idx++) {
+                const [n1, n2, label] = pairsToClick[idx];
                 if (rootGame?.isEndGame) break;
+                if (pacingOn) {
+                    if (idx === 0) {
+                        await IOE.delay?.(1800 + Math.floor(Math.random() * 900));
+                    } else {
+                        IOE.state.lastPacingHeartbeat = Date.now();
+                        await IOE.delay?.(2400 + Math.floor(Math.random() * 1400));
+                    }
+                    if (idx === pairsToClick.length - 1 && IOE.pacing?.waitUntilMinElapsed) {
+                        await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalPairs), 'đọc bài Ghép Cặp');
+                    }
+                }
                 let waitMs = 0;
                 while (matchComp.mask?.active && waitMs < 4000) {
                     await IOE.delay?.(80);
@@ -705,11 +719,11 @@
                 if (typeof n1.opacity === 'number' && n1.opacity <= 8) continue;
                 if (typeof n2.opacity === 'number' && n2.opacity <= 8) continue;
                 await clickCocosNode(n1);
-                await IOE.delay?.(160);
+                await IOE.delay?.(pacingOn ? (380 + Math.floor(Math.random() * 260)) : 160);
                 await clickCocosNode(n2);
                 solvedPairs++;
-                IOE.toast(`🧩 Ghép cặp (${solvedPairs}/${pairsToClick.length}): ${label}`, 1100);
-                await IOE.delay?.(260);
+                IOE.toast(`🧩 Ghép cặp (${solvedPairs}/${pairsToClick.length}): ${label}`, 1200);
+                await IOE.delay?.(pacingOn ? 450 : 260);
             }
             return solvedPairs > 0;
         } catch (e) {
@@ -798,9 +812,22 @@
             }
 
             if (clickOrder.length < 3) return false;
+            const totalReorderQ = IOE.state?.totalExamQuestions || gamePlayComp?.quest?.data?.questionArr?.length || 10;
+            const curKey = `${promptContext.slice(0, 48)}`;
+            if (IOE.state.currentQuestKey !== curKey) {
+                IOE.state.currentQuestKey = curKey;
+                IOE.state.questStartedAt = Date.now();
+            }
+            const pacingOn = IOE.pacing?.isHumanPacingActive?.();
             for (const block of clickOrder) {
                 await clickCocosNode(block.node);
-                await IOE.delay?.(240);
+                await IOE.delay?.(pacingOn ? (340 + Math.floor(Math.random() * 220)) : 240);
+            }
+            if (pacingOn && IOE.pacing?.waitQuestionReadTime) {
+                await IOE.pacing.waitQuestionReadTime(3000, false);
+                if (typeof gamePlayComp?.currentQuestIdx === 'number' && gamePlayComp.currentQuestIdx >= totalReorderQ - 1 && IOE.pacing?.waitUntilMinElapsed) {
+                    await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalReorderQ), 'nộp bài cuối');
+                }
             }
             if (answerBtn?.node) {
                 await IOE.delay?.(320);
@@ -1017,10 +1044,23 @@
                 const maxInput = Number(contPart?.maxInput || 0);
 
                 const qId = qModel?.questionId ?? null;
+                const qKey = String(qId || qPrompt.slice(0, 60));
+                if (IOE.state.currentQuestKey !== qKey) {
+                    IOE.state.currentQuestKey = qKey;
+                    IOE.state.questStartedAt = Date.now();
+                }
                 const optStrings = optBtns.map(b => b.text);
                 const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings, maxInput > 0 ? 'blank' : '', { audioUrl, imageUrl, maxInput });
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
+                    if (IOE.pacing?.isHumanPacingActive?.()) {
+                        await IOE.pacing.waitQuestionReadTime(2800, !!audioUrl);
+                        const totalQ = Number(IOE.state?.totalExamQuestions || 10);
+                        const curNum = Number(textComp?.currentQuestionNumber || (typeof gamePlayComp?.currentQuestIdx === 'number' ? gamePlayComp.currentQuestIdx + 1 : 0));
+                        if (curNum > 0 && curNum >= totalQ && IOE.pacing?.waitUntilMinElapsed) {
+                            await IOE.pacing.waitUntilMinElapsed(IOE.pacing.getMinExamSeconds(totalQ), audioUrl ? 'nghe kỹ bài cuối' : 'đọc kỹ câu cuối');
+                        }
+                    }
 
                     // a0. Native IOE ContentComponent fill-in-the-blank (inputTxt + maxInput + btnIdx 6)
                     if (maxInput > 0 && typeof textComp?.inputTxt === 'string') {

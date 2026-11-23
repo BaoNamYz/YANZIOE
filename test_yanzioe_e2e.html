@@ -750,8 +750,26 @@
                 log('32. Live DienTuQuestion populates inputTxt matching maxInput & clicks btnIdx 6 submit',
                     dtOk === true && blankUpdated === true && blankSubmittedVal === 'years');
 
+                // Test 33: Anti-speed-flag Human Pacing captures server timeAuto & examStartedAt from startgame packet
+                window.IOE.state.serverTimeAuto = 0;
+                window.IOE.state.currentExamKey = '';
+                window.IOE.question.parsePacket({
+                    examKey: 'EX_PACING_33',
+                    timeAuto: 35,
+                    timeDoing: 5,
+                    question: [{ id: 'p1', content: { content: 'Test Q' }, ans: [{ content: 'ok' }] }]
+                });
+                const pacingSrv = window.IOE.pacing.getMinExamSeconds(6); // 35 + 5 = 40
+                window.IOE.state.serverTimeAuto = 0;
+                const pacingFloor = window.IOE.pacing.getMinExamSeconds(6); // max(34, 6*4.5=27) = 34
+                window.IOE.state._forcePacingForTest = true;
+                const pacingActiveForce = window.IOE.pacing.isHumanPacingActive() === true;
+                delete window.IOE.state._forcePacingForTest;
+                log('33. Captures startgame timeAuto/examStartedAt & enforces anti-speed-flag Human Pacing floor',
+                    pacingSrv === 40 && pacingFloor === 34 && pacingActiveForce && window.IOE.state.totalExamQuestions === 1);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 34;
+                const allPassed = failCount === 0 && passCount >= 35;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
