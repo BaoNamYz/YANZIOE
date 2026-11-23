@@ -317,6 +317,8 @@
         let instruction = '';
         if (taskHint === 'reorder') {
             instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
+        } else if (taskHint === 'pairs') {
+            instruction = `Task: Match ALL ${cleanOpts.length} cards below into ${Math.floor(cleanOpts.length / 2)} exact pairs.\nCards:\n${cleanOpts.map((c, i) => `${i}: ${c}`).join('\n')}\nRules: Return ONLY raw JSON {"answer": [["card1", "card2"], ...]} with exact card texts.`;
         } else {
             instruction = `Solve this Vietnamese Olympic English (IOE) question accurately.\nIf multiple choice, return the exact winning option text (NOT just letter A/B/C/D if text is shown).\nIf fill in the blank, return ONLY the missing word or phrase.\nIf word reordering, return ONLY the full reordered English sentence.`;
         }
@@ -329,12 +331,16 @@
             const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
             let extracted = '';
             if (m) {
-                try { extracted = String(JSON.parse(m[0]).answer || '').trim(); } catch (e) {}
+                try {
+                    const parsed = JSON.parse(m[0]);
+                    const v = parsed.answer;
+                    extracted = Array.isArray(v) ? JSON.stringify(v) : String(v || '').trim();
+                } catch (e) {}
             }
             if (!extracted) {
                 extracted = raw.replace(/```json|```/gi, '').replace(/^[\s"'{}]+|[\s"'{}]+$/g, '').trim();
             }
-            return taskHint === 'reorder' ? extracted : resolveOptionAnswer(extracted, cleanOpts);
+            return (taskHint === 'reorder' || taskHint === 'pairs') ? extracted : resolveOptionAnswer(extracted, cleanOpts);
         } catch (err) {
             lastAiError = err?.message || String(err);
             return null;

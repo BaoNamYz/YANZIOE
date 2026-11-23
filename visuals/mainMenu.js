@@ -335,7 +335,7 @@
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.2')} (Licensed).</div>
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;text-align:left;word-break:break-word;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.3')} (Licensed).</div>
                     <div style="display:flex;gap:5px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
                         <button id="yanz-btn-debug" style="flex:1;background:#4f46e5;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">🔍 Soi trang</button>
@@ -546,7 +546,7 @@
         document.getElementById('yanz-btn-debug')?.addEventListener('click', () => {
             const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
             const domP = IOE.auto?.extractGenericDomQuestion ? IOE.auto.extractGenericDomQuestion()?.qText?.slice(0, 60) : '';
-            appendLog(`[TOP Debug] ${JSON.stringify({ href: location.href, iframes: document.querySelectorAll('iframe').length, ...diag, domPreview: domP || '', pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size })}`);
+            appendLog(`[TOP Debug] ${JSON.stringify({ ...diag, iframes: document.querySelectorAll('iframe').length, pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size, domPreview: domP || '', href: location.href })}`);
             broadcastToFrames({ type: 'YANZIOE_CMD', action: 'DEBUG_SCAN' });
         });
         document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {

@@ -518,8 +518,99 @@
                 delete window.cc;
                 log('28. Live TextContent + AnswerButton passes e.currentTarget & selects "beautiful"', tcOk === true && tcPicked === 'beautiful');
 
+                // Test 29: Repro - Live Cocos Creator serialized cc.Scene (active=false, activeInHierarchy=true) + Game12 Matching Pairs (Ghép Cặp)
+                const matchedPairs = [];
+                const g12Mask = { active: false };
+                function G12Btn(evs) { this.interactable = true; this.clickEvents = evs || []; }
+                const g12Data = {
+                    game: {
+                        Subject: { content: 'Match an English word with its phonetic transcriptions.' },
+                        question: [
+                            { id: 'm1', content: { content: 'confusion (n)' }, ans: [{ content: "/kən'fjuː.ʒən/" }] },
+                            { id: 'm2', content: { content: 'custom (n)' }, ans: [{ content: "/'kʌs.təm/" }] },
+                            { id: 'm3', content: { content: 'admire (v)' }, ans: [{ content: "/əd'maɪər/" }] }
+                        ],
+                        ans: [
+                            { ans: "/əd'maɪər/" },
+                            { ans: "/kən'fjuː.ʒən/" },
+                            { ans: "/'kʌs.təm/" }
+                        ]
+                    }
+                };
+                const g12Comp = {
+                    ctnCross: { active: true, activeInHierarchy: true, children: [] },
+                    data: g12Data,
+                    mask: g12Mask,
+                    selectCross1: undefined,
+                    count: 6,
+                    txtQuestion: { string: g12Data.game.Subject.content },
+                    rootGame: {
+                        isEndGame: false,
+                        findQuestModel: (txt) => {
+                            const found = g12Data.game.question.find(q => q.content.content === txt);
+                            return found ? { answearArr: [{ content: found.ans[0].content }] } : null;
+                        },
+                        submit(d1, d2) {
+                            const left = d1.content ? d1.content.content : d2.content.content;
+                            const right = typeof d1.ans === 'string' ? d1.ans : d2.ans;
+                            const ok = g12Data.game.question.some(q => q.content.content === left && q.ans[0].content === right);
+                            if (ok) {
+                                matchedPairs.push([left, right]);
+                                g12Comp.selectCross1.opacity = 1;
+                                g12Comp.selectCross2.opacity = 1;
+                                g12Comp.selectCross1.getComponent('cc.Button').interactable = false;
+                                g12Comp.selectCross2.getComponent('cc.Button').interactable = false;
+                            }
+                            g12Comp.selectCross1 = undefined;
+                            g12Comp.selectCross2 = undefined;
+                            g12Mask.active = false;
+                        }
+                    },
+                    onHandlerChooseAnswerCross(e) {
+                        if (!g12Comp.selectCross1) {
+                            g12Comp.selectCross1 = e.target;
+                        } else {
+                            g12Comp.selectCross2 = e.target;
+                            g12Mask.active = true;
+                            g12Comp.rootGame.submit(g12Comp.selectCross1.dataAnswer, g12Comp.selectCross2.dataAnswer);
+                        }
+                    }
+                };
+                const rawCards = [...g12Data.game.ans, ...g12Data.game.question]; // shuffled order
+                g12Comp.ctnCross.children = rawCards.map((dObj, i) => {
+                    const cardTxt = dObj.content?.content || dObj.ans;
+                    const cardNode = {
+                        name: `cross_${i}`, active: true, activeInHierarchy: true, opacity: 255,
+                        dataAnswer: dObj, _string: cardTxt, children: [],
+                        convertToWorldSpaceAR: () => ({ x: 150 + (i % 3) * 180, y: 400 - Math.floor(i / 3) * 140 })
+                    };
+                    const btn = new G12Btn([{ customEventData: '', emit(args) { g12Comp.onHandlerChooseAnswerCross(args[0]); } }]);
+                    cardNode._components = [btn];
+                    cardNode.getComponent = (t) => (t === window.cc.Button || t === 'cc.Button') ? btn : null;
+                    return cardNode;
+                });
+                const g12Canvas = {
+                    name: 'Canvas', active: true, activeInHierarchy: true, _components: [g12Comp],
+                    children: [g12Comp.ctnCross], convertToWorldSpaceAR: () => ({ x: 500, y: 300 })
+                };
+                const g12SerializedScene = {
+                    name: 'New Node', active: false, activeInHierarchy: true,
+                    children: [g12Canvas], _components: []
+                };
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: G12Btn,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e, ev.customEventData]); } } },
+                    director: { getRunningScene: () => g12SerializedScene, getScene: () => g12SerializedScene }
+                };
+                const diag29 = window.IOE.canvas.getSceneDiagnostics();
+                const g12Ok = await window.IOE.canvas.solveCanvasGame();
+                delete window.cc;
+                log('29. Traverses serialized cc.Scene (active=false, activeInHierarchy=true) & pairs Game12 (Ghép Cặp) accurately',
+                    diag29.cocosTextCount >= 6 && g12Ok === true && matchedPairs.length === 3);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 30;
+                const allPassed = failCount === 0 && passCount >= 31;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

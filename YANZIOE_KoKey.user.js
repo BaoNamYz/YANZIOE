@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YANZIOE VIP (CoKey) - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
-// @version      1.2.2
+// @version      1.2.3
 // @description  Tool tự giải bài và hiển thị đáp án Olympic Tiếng Anh IOE.vn (Cocos2d, CreateJS & DOM) - Có License Key YanzBn
 // @author       YanzBn
 // @match        *://ioe.vn/*
@@ -26,7 +26,7 @@
 // @noframes     false
 // ==/UserScript==
 
-/* YANZIOE VIP v1.2.2 */
+/* YANZIOE VIP v1.2.3 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     if (_w.__YANZIOE_BOOTED__) return;
@@ -177,7 +177,7 @@
     }
 
     const ioeState = {
-        version: '1.2.2',
+        version: '1.2.3',
         events,
         toast,
         delay,
@@ -1178,6 +1178,8 @@
         let instruction = '';
         if (taskHint === 'reorder') {
             instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
+        } else if (taskHint === 'pairs') {
+            instruction = `Task: Match ALL ${cleanOpts.length} cards below into ${Math.floor(cleanOpts.length / 2)} exact pairs.\nCards:\n${cleanOpts.map((c, i) => `${i}: ${c}`).join('\n')}\nRules: Return ONLY raw JSON {"answer": [["card1", "card2"], ...]} with exact card texts.`;
         } else {
             instruction = `Solve this Vietnamese Olympic English (IOE) question accurately.\nIf multiple choice, return the exact winning option text (NOT just letter A/B/C/D if text is shown).\nIf fill in the blank, return ONLY the missing word or phrase.\nIf word reordering, return ONLY the full reordered English sentence.`;
         }
@@ -1190,12 +1192,16 @@
             const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
             let extracted = '';
             if (m) {
-                try { extracted = String(JSON.parse(m[0]).answer || '').trim(); } catch (e) {}
+                try {
+                    const parsed = JSON.parse(m[0]);
+                    const v = parsed.answer;
+                    extracted = Array.isArray(v) ? JSON.stringify(v) : String(v || '').trim();
+                } catch (e) {}
             }
             if (!extracted) {
                 extracted = raw.replace(/```json|```/gi, '').replace(/^[\s"'{}]+|[\s"'{}]+$/g, '').trim();
             }
-            return taskHint === 'reorder' ? extracted : resolveOptionAnswer(extracted, cleanOpts);
+            return (taskHint === 'reorder' || taskHint === 'pairs') ? extracted : resolveOptionAnswer(extracted, cleanOpts);
         } catch (err) {
             lastAiError = err?.message || String(err);
             return null;
@@ -1865,7 +1871,8 @@
     function canTraverseNode(node) {
         if (!node) return false;
         try {
-            if (node.active === false || node.activeInHierarchy === false) return false;
+            if (node.activeInHierarchy === false) return false;
+            if (node.activeInHierarchy === undefined && node.active === false) return false;
             if (node.visible === false) return false;
             if (typeof node.isVisible === 'function' && !node.isVisible()) return false;
             if (node.scaleX === 0 || node.scaleY === 0) return false;
@@ -2400,6 +2407,7 @@
     function inspectIoeGameComponents(scene) {
         let gamePlayComp = null;
         let reorderComp = null;
+        let matchComp = null;
         let textComp = null;
         const seen = new WeakSet();
         (function walk(n, d = 0) {
@@ -2407,14 +2415,128 @@
             seen.add(n);
             for (const c of (n._components || [])) {
                 if (!c) continue;
-                if (!gamePlayComp && (c.btnSubmit || c.quest)) gamePlayComp = c;
+                if (!gamePlayComp && (c.btnSubmit || c.quest || typeof c.findQuestModel === 'function')) gamePlayComp = c;
                 if (!reorderComp && Array.isArray(c.listText) && Array.isArray(c.listAnswer)) reorderComp = c;
+                if (!matchComp && c.ctnCross && (c.rootGame || c.data?.game?.question)) matchComp = c;
                 if (!textComp && c.questionModel && Array.isArray(c.buttons)) textComp = c;
             }
             const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
             for (const x of ch) walk(x, d + 1);
         })(scene, 0);
-        return { gamePlayComp, reorderComp, textComp };
+        return { gamePlayComp, reorderComp, matchComp, textComp };
+    }
+
+    async function solveCocosMatchingPairs(scene) {
+        if (!scene) return false;
+        let matchCompRef = null;
+        try {
+            const cc = win.cc;
+            const { gamePlayComp, matchComp } = inspectIoeGameComponents(scene);
+            if (!matchComp || !matchComp.ctnCross || matchComp._yanzBusy) return false;
+            matchCompRef = matchComp;
+            matchCompRef._yanzBusy = true;
+            const rootGame = matchComp.rootGame || gamePlayComp;
+            if (rootGame?.isEndGame) return false;
+
+            const cardNodes = (matchComp.ctnCross.children || []).filter(n => {
+                if (!canTraverseNode(n)) return false;
+                if (typeof n.opacity === 'number' && n.opacity <= 8) return false;
+                const btn = typeof n.getComponent === 'function' ? ((cc?.Button && n.getComponent(cc.Button)) || n.getComponent('cc.Button')) : null;
+                return !(btn && btn.interactable === false);
+            });
+            if (cardNodes.length < 2) return false;
+
+            // If user had 1 card half-selected, clear it before pairing cleanly
+            if (matchComp.selectCross1) {
+                await clickCocosNode(matchComp.selectCross1);
+                await IOE.delay?.(120);
+            }
+
+            const pairsToClick = [];
+            const usedNodes = new WeakSet();
+            const qList = matchComp.data?.game?.question || [];
+
+            // Tier 0 (RAM / ClientData.AppModel exact pairs - supports text, IPA & image cards!)
+            if (qList.length > 0 || typeof rootGame?.findQuestModel === 'function') {
+                const leftCards = cardNodes.filter(n => n.dataAnswer && (n.dataAnswer.content?.content || (typeof n.dataAnswer.content === 'string' && !n.dataAnswer.ans)));
+                for (const leftNode of leftCards) {
+                    if (usedNodes.has(leftNode)) continue;
+                    const i = String(leftNode.dataAnswer?.content?.content ?? leftNode.dataAnswer?.content ?? '').trim();
+                    if (!i) continue;
+                    const qModel = rootGame?.findQuestModel?.(i);
+                    let targetAns = qModel?.answearArr?.[0]?.content;
+                    if (!targetAns) {
+                        const rawQ = qList.find(q => String(q.content?.content ?? q.content ?? '').trim() === i);
+                        targetAns = rawQ?.ans?.[0]?.content ?? rawQ?.answearArr?.[0]?.content;
+                    }
+                    if (!targetAns) continue;
+                    const targetNorm = String(targetAns).replace(/\.(PNG|JPG|JPEG|GIF)$/i, m => m.toLowerCase()).trim();
+
+                    const rightNode = cardNodes.find(n => {
+                        if (n === leftNode || usedNodes.has(n) || !n.dataAnswer) return false;
+                        const a = typeof n.dataAnswer.ans === 'string' ? n.dataAnswer.ans : '';
+                        const aNorm = a.replace(/\.(PNG|JPG|JPEG|GIF)$/i, m => m.toLowerCase()).trim();
+                        return a && (a.trim() === String(targetAns).trim() || aNorm === targetNorm);
+                    });
+                    if (rightNode) {
+                        usedNodes.add(leftNode);
+                        usedNodes.add(rightNode);
+                        pairsToClick.push([leftNode, rightNode, `${i} ↔ ${targetNorm}`]);
+                    }
+                }
+            }
+
+            // Tier 2 Fallback (AI Batch Pair Matching if dataAnswer RAM not bound)
+            if (pairsToClick.length === 0) {
+                const cardsWithText = cardNodes.map(n => ({
+                    node: n,
+                    text: (getNodeText(n) || extractCocosTexts(n, 3).map(t => t.text).join(' ')).trim()
+                })).filter(c => c.text);
+                if (cardsWithText.length >= 2) {
+                    const qPrompt = getNodeText(matchComp.txtQuestion?.node || matchComp.txtQuestion) || 'Match the exact pairs';
+                    const meta = await IOE.question?.solveQuestion(null, qPrompt, cardsWithText.map(c => c.text), 'pairs');
+                    let pairsArr = null;
+                    try { pairsArr = meta?.answer ? JSON.parse(meta.answer) : null; } catch (e) {}
+                    if (Array.isArray(pairsArr)) {
+                        for (const pair of pairsArr) {
+                            if (!Array.isArray(pair) || pair.length < 2) continue;
+                            const cardA = cardsWithText.find(c => !usedNodes.has(c.node) && c.text.toLowerCase() === String(pair[0]).trim().toLowerCase());
+                            const cardB = cardsWithText.find(c => c !== cardA && !usedNodes.has(c.node) && c.text.toLowerCase() === String(pair[1]).trim().toLowerCase());
+                            if (cardA && cardB) {
+                                usedNodes.add(cardA.node);
+                                usedNodes.add(cardB.node);
+                                pairsToClick.push([cardA.node, cardB.node, `${cardA.text} ↔ ${cardB.text}`]);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (pairsToClick.length === 0) return false;
+            IOE.state.lastEngine = 'Cocos2d (Ghép Cặp)';
+            let solvedPairs = 0;
+            for (const [n1, n2, label] of pairsToClick) {
+                if (rootGame?.isEndGame) break;
+                let waitMs = 0;
+                while (matchComp.mask?.active && waitMs < 4000) {
+                    await IOE.delay?.(80);
+                    waitMs += 80;
+                }
+                if (typeof n1.opacity === 'number' && n1.opacity <= 8) continue;
+                if (typeof n2.opacity === 'number' && n2.opacity <= 8) continue;
+                await clickCocosNode(n1);
+                await IOE.delay?.(160);
+                await clickCocosNode(n2);
+                solvedPairs++;
+                IOE.toast(`🧩 Ghép cặp (${solvedPairs}/${pairsToClick.length}): ${label}`, 1100);
+                await IOE.delay?.(260);
+            }
+            return solvedPairs > 0;
+        } catch (e) {
+            return false;
+        } finally {
+            if (matchCompRef) matchCompRef._yanzBusy = false;
+        }
     }
 
     async function solveCocosWordReordering(scene) {
@@ -2655,6 +2777,9 @@
             // 1. Cloze Passage ("Lâu đài trên mây")
             if (await solveCocosClozePassage(cocosScene)) return true;
 
+            // 1B. Matching Pairs ("Ghép Cặp" / Game12)
+            if (await solveCocosMatchingPairs(cocosScene)) return true;
+
             // 2. Word Reordering ("Bạch tuộc thu ngọc")
             if (await solveCocosWordReordering(cocosScene)) return true;
 
@@ -2771,6 +2896,8 @@
         return {
             ccPresent: !!win.cc,
             sceneFound: !!sc,
+            sceneActive: sc?.active,
+            sceneActiveInHierarchy: sc?.activeInHierarchy,
             canvasCount: document.querySelectorAll('canvas').length,
             cocosTextCount: texts.length,
             cocosClickableCount: clicks.length,
@@ -2782,6 +2909,7 @@
     IOE.canvas = {
         solveCanvasGame,
         solveCocosClozePassage,
+        solveCocosMatchingPairs,
         solveCocosWordReordering,
         solveCreateJSGame,
         getCocosScene,
@@ -3555,7 +3683,7 @@
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.2')} (Licensed).</div>
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;text-align:left;word-break:break-word;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.3')} (Licensed).</div>
                     <div style="display:flex;gap:5px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
                         <button id="yanz-btn-debug" style="flex:1;background:#4f46e5;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">🔍 Soi trang</button>
@@ -3766,7 +3894,7 @@
         document.getElementById('yanz-btn-debug')?.addEventListener('click', () => {
             const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
             const domP = IOE.auto?.extractGenericDomQuestion ? IOE.auto.extractGenericDomQuestion()?.qText?.slice(0, 60) : '';
-            appendLog(`[TOP Debug] ${JSON.stringify({ href: location.href, iframes: document.querySelectorAll('iframe').length, ...diag, domPreview: domP || '', pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size })}`);
+            appendLog(`[TOP Debug] ${JSON.stringify({ ...diag, iframes: document.querySelectorAll('iframe').length, pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size, domPreview: domP || '', href: location.href })}`);
             broadcastToFrames({ type: 'YANZIOE_CMD', action: 'DEBUG_SCAN' });
         });
         document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {
