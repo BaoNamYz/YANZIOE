@@ -252,7 +252,7 @@
         return found;
     }
 
-    async function callGeminiApi(apiKey, prompt, expectJson = true) {
+    async function callGeminiApi(apiKey, prompt, expectJson = true, inlineParts = []) {
         const cacheKey = `gemini:${String(apiKey || '').slice(0, 10)}`;
         const initialModels = discoveredModelsCache.get(cacheKey)?.models || [
             'gemini-3.8-flash',
@@ -262,6 +262,8 @@
             'gemini-2.5-flash-lite'
         ];
 
+        const contentParts = [{ text: prompt }, ...(Array.isArray(inlineParts) ? inlineParts : [])];
+
         async function tryList(models) {
             let authFatal = false;
             for (const m of models) {
@@ -270,7 +272,7 @@
                     const genCfg = { temperature: 0.1, maxOutputTokens: 1000 };
                     if (expectJson) genCfg.responseMimeType = 'application/json';
                     const r = await extRequestJson(endpoint, 'POST', { 'Content-Type': 'application/json' }, {
-                        contents: [{ parts: [{ text: prompt }] }],
+                        contents: [{ parts: contentParts }],
                         generationConfig: genCfg
                     }, 8500);
 
@@ -370,12 +372,39 @@
         return cfg || 'gemini';
     }
 
-    async function callAiRaw(prompt) {
+    async function fetchMediaBase64(url) {
+        if (!url || !IOE.net?.requestExternal) return null;
+        try {
+            const r = await IOE.net.requestExternal(url, { method: 'GET', responseType: 'base64', timeoutMs: 12000 });
+            if (r?.ok && r.base64) return { base64: r.base64, contentType: r.contentType || '' };
+        } catch (e) {}
+        return null;
+    }
+
+    async function transcribeAudioWithGroq(apiKey, audioBase64) {
+        if (!audioBase64 || !IOE.net?.requestExternal) return '';
+        try {
+            const r = await IOE.net.requestExternal('https://api.groq.com/openai/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+                multipartAudioBase64: audioBase64,
+                whisperModel: 'whisper-large-v3-turbo',
+                timeoutMs: 12000
+            });
+            if (r?.ok && r.text) {
+                const j = JSON.parse(r.text);
+                return String(j?.text || '').trim();
+            }
+        } catch (e) {}
+        return '';
+    }
+
+    async function callAiRaw(prompt, inlineParts = []) {
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) { lastAiError = 'Chưa nhập API Key'; return null; }
         const provider = detectProvider(apiKey);
         if (provider === 'gemini') {
-            return await callGeminiApi(apiKey, prompt, true);
+            return await callGeminiApi(apiKey, prompt, true, inlineParts);
         }
         if (provider === 'groq') {
             return await callOpenAiCompat('https://api.groq.com/openai/v1/chat/completions', apiKey, [
@@ -398,6 +427,16 @@
         let ans = String(rawAns || '').trim();
         if (!ans || !Array.isArray(options) || options.length === 0) return ans;
         const cleanOpts = options.map(stripOptionPrefix);
+        // Handle True/False normalization when options are explicitly True & False
+        if (cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o))) {
+            const lo = ans.toLowerCase();
+            if (/^(true|đúng|yes|1|t)$/i.test(lo) || (cleanOpts[0].toLowerCase() === 'true' && /^a\.?$/i.test(lo)) || (cleanOpts[1].toLowerCase() === 'true' && /^b\.?$/i.test(lo))) {
+                return cleanOpts.find(o => /^true$/i.test(o)) || 'True';
+            }
+            if (/^(false|sai|no|0|f)$/i.test(lo) || (cleanOpts[0].toLowerCase() === 'false' && /^a\.?$/i.test(lo)) || (cleanOpts[1].toLowerCase() === 'false' && /^b\.?$/i.test(lo))) {
+                return cleanOpts.find(o => /^false$/i.test(o)) || 'False';
+            }
+        }
         // Handle single option letter "A", "B", "C", "D" or "A."
         const mLet = /^([A-Da-d])\.?$/.exec(ans);
         if (mLet) {
@@ -407,9 +446,10 @@
         return ans;
     }
 
-    async function solveWithAi(qId, qText, options = [], taskHint = '') {
+    async function solveWithAi(qId, qText, options = [], taskHint = '', mediaOpts = null) {
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) return null;
+        const provider = detectProvider(apiKey);
 
         const wrongList = getWrongAnswers(qId);
         const wrongNote = wrongList.length ? `\nKnown WRONG options (NEVER pick these): ${wrongList.join(', ')}` : '';
@@ -418,19 +458,44 @@
             ? `\nOptions:\n${cleanOpts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n')}`
             : '';
 
+        const inlineParts = [];
+        let audioTranscriptNote = '';
+        if (mediaOpts?.audioUrl) {
+            const media = await fetchMediaBase64(mediaOpts.audioUrl);
+            if (media?.base64) {
+                if (provider === 'gemini') {
+                    inlineParts.push({ inlineData: { mimeType: media.contentType || 'audio/mpeg', data: media.base64 } });
+                } else if (provider === 'groq') {
+                    const tr = await transcribeAudioWithGroq(apiKey, media.base64);
+                    if (tr) audioTranscriptNote = `\nListening Audio Transcript: "${tr}"`;
+                }
+            }
+        }
+        if (mediaOpts?.imageUrl && provider === 'gemini') {
+            const img = await fetchMediaBase64(mediaOpts.imageUrl);
+            if (img?.base64) {
+                inlineParts.push({ inlineData: { mimeType: img.contentType || 'image/jpeg', data: img.base64 } });
+            }
+        }
+
+        const isTrueFalse = cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o));
         let instruction = '';
         if (taskHint === 'reorder') {
             instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
         } else if (taskHint === 'pairs') {
             instruction = `Task: Match ALL ${cleanOpts.length} cards below into ${Math.floor(cleanOpts.length / 2)} exact pairs.\nCards:\n${cleanOpts.map((c, i) => `${i}: ${c}`).join('\n')}\nRules: Return ONLY raw JSON {"answer": [["card1", "card2"], ...]} with exact card texts.`;
+        } else if (taskHint === 'blank' && mediaOpts?.maxInput > 0) {
+            instruction = `Task: Fill the missing letter(s) represented by underscores ("_").\nRequired character length: EXACTLY ${mediaOpts.maxInput} character(s).\nIf the whole word is underscores (e.g. ____), return the full ${mediaOpts.maxInput}-letter English word; if partial letters exist (e.g. t_m_rrow), return ONLY the ${mediaOpts.maxInput} missing letter(s) in order.`;
+        } else if (isTrueFalse) {
+            instruction = `Task: Decide whether the statement is True or False (use the Listening Audio or Audio Transcript if provided, otherwise verify the factual/grammar statement).\nRules: Answer MUST be strictly "True" or "False". NEVER repeat the statement sentence.`;
         } else {
             instruction = `Solve this Vietnamese Olympic English (IOE) question accurately.\nIf multiple choice, return the exact winning option text (NOT just letter A/B/C/D if text is shown).\nIf fill in the blank, return ONLY the missing word or phrase.\nIf word reordering, return ONLY the full reordered English sentence.`;
         }
 
-        const prompt = `${instruction}\nReturn ONLY raw JSON: {"answer": "..."} with NO markdown.\nQuestion: ${qText}${optsText}${wrongNote}`;
+        const prompt = `${instruction}\nReturn ONLY raw JSON: {"answer": "..."} with NO markdown.\nQuestion: ${qText}${audioTranscriptNote}${optsText}${wrongNote}`;
 
         try {
-            const raw = await callAiRaw(prompt);
+            const raw = await callAiRaw(prompt, inlineParts);
             if (!raw) return null;
             const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
             let extracted = '';
@@ -695,7 +760,7 @@
     }
 
     /* ================= 5. SOLVE ORCHESTRATOR ================= */
-    async function solveQuestion(qId, qText, options = [], taskHint = '') {
+    async function solveQuestion(qId, qText, options = [], taskHint = '', mediaOpts = null) {
         if (!checkLicensed()) {
             IOE.license?.showLicenseModal?.('Vui lòng kích hoạt Key YANZ-IOE trước khi giải bài!');
             return null;
@@ -750,7 +815,7 @@
         }
 
         IOE.toast('🔍 Đang giải câu hỏi...', 1000);
-        const aiAns = await solveWithAi(qId, qText, options, taskHint);
+        const aiAns = await solveWithAi(qId, qText, options, taskHint, mediaOpts);
         if (aiAns && !isAnswerWrong(qId, aiAns)) {
             const thinking = generate0msThinking(qText, aiAns, 'Tier 2 (AI)');
             const meta = { qId, qText, answer: aiAns, tier: 'Tier 2 (AI)', thinking };

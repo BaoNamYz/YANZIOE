@@ -158,13 +158,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg?.type !== 'IOE_FETCH' || !msg.payload?.url) return false;
 
-    const { url, method = 'GET', headers = {}, body, responseType = 'text' } = msg.payload;
+    const { url, method = 'GET', headers = {}, body, responseType = 'text', multipartAudioBase64 = '', whisperModel = 'whisper-large-v3-turbo' } = msg.payload;
     (async () => {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 28000);
         try {
-            const init = { method, headers, signal: ctrl.signal };
-            if (body !== undefined && method.toUpperCase() !== 'GET' && method.toUpperCase() !== 'HEAD') {
+            const cleanHeaders = { ...headers };
+            const init = { method, headers: cleanHeaders, signal: ctrl.signal };
+            if (multipartAudioBase64) {
+                const binStr = atob(multipartAudioBase64);
+                const bytes = new Uint8Array(binStr.length);
+                for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+                const fd = new FormData();
+                fd.append('file', new Blob([bytes], { type: 'audio/mpeg' }), 'question.mp3');
+                fd.append('model', whisperModel || 'whisper-large-v3-turbo');
+                init.method = 'POST';
+                init.body = fd;
+                delete cleanHeaders['Content-Type'];
+            } else if (body !== undefined && method.toUpperCase() !== 'GET' && method.toUpperCase() !== 'HEAD') {
                 init.body = body;
             }
             const resp = await fetch(url, init);
@@ -248,7 +259,8 @@ def write_extension_dir(target_dir, code, name_suffix=""):
             "https://api.groq.com/*",
             "https://generativelanguage.googleapis.com/*",
             "https://aiplatform.googleapis.com/*",
-            "https://openrouter.ai/*"
+            "https://openrouter.ai/*",
+            "https://*/*"
         ],
         "permissions": ["activeTab", "scripting", "storage"],
         "web_accessible_resources": [

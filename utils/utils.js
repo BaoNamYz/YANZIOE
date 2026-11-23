@@ -72,7 +72,7 @@
     }
 
     async function requestExternal(url, options = {}) {
-        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;
+        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text', multipartAudioBase64 = '', whisperModel = '' } = options;
 
         // Channel 1: Extension MV3 Background Bridge (zero CSP/CORS restrictions)
         if (document.documentElement?.dataset?.ioeBridge === '1') {
@@ -92,7 +92,7 @@
                 window.postMessage({
                     type: 'IOE_BRIDGE_FETCH_REQ',
                     id,
-                    payload: { url, method, headers, body, responseType }
+                    payload: { url, method, headers, body, responseType, multipartAudioBase64, whisperModel }
                 }, '*');
             });
             if (bridgeRes) {
@@ -126,7 +126,26 @@
         const ctrl = new AbortController();
         const tm = nativeSetTimeout(() => ctrl.abort(), timeoutMs);
         try {
-            const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
+            const cleanHeaders = { ...headers };
+            let fetchBody = body;
+            if (multipartAudioBase64) {
+                const binStr = atob(multipartAudioBase64);
+                const bytes = new Uint8Array(binStr.length);
+                for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+                const fd = new FormData();
+                fd.append('file', new Blob([bytes], { type: 'audio/mpeg' }), 'question.mp3');
+                fd.append('model', whisperModel || 'whisper-large-v3-turbo');
+                fetchBody = fd;
+                delete cleanHeaders['Content-Type'];
+            }
+            const r = await fetch(url, { method, headers: cleanHeaders, body: fetchBody, signal: ctrl.signal });
+            if (responseType === 'base64' && typeof r.arrayBuffer === 'function') {
+                const buf = await r.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                let bin = '';
+                for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+                return { ok: r.ok, status: r.status, text: '', base64: btoa(bin), contentType: r.headers?.get?.('content-type') || 'audio/mpeg' };
+            }
             let text = '';
             if (typeof r.text === 'function') text = await r.text();
             else if (typeof r.json === 'function') text = JSON.stringify(await r.json());
@@ -143,7 +162,7 @@
     }
 
     const ioeState = {
-        version: '1.2.4',
+        version: '1.2.5',
         events,
         toast,
         delay,

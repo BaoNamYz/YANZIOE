@@ -640,8 +640,118 @@
                 log('30. Groq auto-discovers live models on HTTP 404 & ignores "Vòng Tự luyện" lobby cards',
                     discoveredUsed && discRes?.answer === 'aurora' && lobbyDetected === null);
 
+                // Test 31: Live IOE TrueFalseQuestion + AudioContent (empty Sprite btnIdx 0/1 + .mp3 Whisper transcript)
+                let tfPicked = '';
+                let promptHadAudioUrl = true;
+                let promptHadTranscript = false;
+                let promptHadTfRule = false;
+                function TfBtn(idx, evs) { this.interactable = true; this.btnIdx = idx; this.btnTxt = ''; this.btnContent = ''; this.clickEvents = evs || []; }
+                const tfBtns = [0, 1].map((btnIdx) => {
+                    const node = {
+                        name: btnIdx === 1 ? 'btnTrue' : 'btnFalse', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                        children: [], convertToWorldSpaceAR: () => ({ x: 800, y: btnIdx === 1 ? 520 : 410 })
+                    };
+                    const ev = {
+                        customEventData: '',
+                        emit(args) {
+                            const ab = args?.[0]?.currentTarget?.getComponent?.('cc.Button');
+                            tfPicked = ab?.btnIdx === 1 ? 'True' : 'False';
+                        }
+                    };
+                    const comp = new TfBtn(btnIdx, [ev]);
+                    comp.node = node;
+                    node._components = [comp];
+                    node.getComponent = () => comp;
+                    return comp;
+                });
+                const audioTfComp = {
+                    canClick: true,
+                    remoteSound: 'https://cdn.ioe.vn/audio/trung_sisters.MP3',
+                    buttons: tfBtns,
+                    questionModel: {
+                        questionId: 'q_tf_audio_31',
+                        questionDescription: { hasAudio: true, hasImage: false, content: 'https://cdn.ioe.vn/audio/trung_sisters.MP3' },
+                        questionContent: { hasAudio: false, hasImage: false, content: 'The Trung Sisters ruled the country for three years.', maxInput: 0 }
+                    }
+                };
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: TfBtn,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e, ev.customEventData]); } } },
+                    director: {
+                        getRunningScene: () => ({
+                            active: false, activeInHierarchy: true,
+                            children: [{ active: true, activeInHierarchy: true, _components: [audioTfComp], children: tfBtns.map(b => b.node) }]
+                        })
+                    }
+                };
+                const prevKey31 = window.IOE.featureConfigs.apiKey;
+                const prevFetch31 = window.fetch;
+                window.IOE.featureConfigs.apiKey = 'gsk_test_tf_audio_31';
+                window.fetch = async (url, opts) => {
+                    const u = String(url);
+                    if (u.endsWith('trung_sisters.mp3')) {
+                        return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([73, 68, 51]).buffer, headers: { get: () => 'audio/mpeg' } };
+                    }
+                    if (u.includes('/audio/transcriptions')) {
+                        return { ok: true, status: 200, text: async () => JSON.stringify({ text: 'The Trung Sisters ruled our country for three years.' }) };
+                    }
+                    const pMsg = JSON.parse(opts?.body || '{}')?.messages?.[0]?.content || '';
+                    promptHadAudioUrl = /trung_sisters\.mp3/i.test(pMsg);
+                    promptHadTranscript = pMsg.includes('The Trung Sisters ruled our country for three years.');
+                    promptHadTfRule = pMsg.includes('strictly "True" or "False"');
+                    return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: '{"answer":"True"}' } }] }) };
+                };
+                const tfOk = await window.IOE.canvas.solveCanvasGame();
+                window.fetch = prevFetch31;
+                window.IOE.featureConfigs.apiKey = prevKey31;
+                delete window.cc;
+                log('31. Live TrueFalse + AudioContent resolves Sprite btnIdx 0/1, transcribes MP3 via Whisper & clicks True',
+                    tfOk === true && tfPicked === 'True' && !promptHadAudioUrl && promptHadTranscript && promptHadTfRule);
+
+                // Test 32: Live IOE DienTuQuestion (inputTxt + maxInput + btnIdx 6 submit)
+                let blankSubmittedVal = '';
+                let blankUpdated = false;
+                function DtBtn(idx, evs) { this.interactable = true; this.btnIdx = idx; this.btnTxt = ''; this.clickEvents = evs || []; }
+                const submitNode32 = {
+                    name: 'btnSubmit6', active: true, activeInHierarchy: true, opacity: 255, children: [],
+                    convertToWorldSpaceAR: () => ({ x: 500, y: 200 })
+                };
+                const dtComp = {
+                    canClick: true,
+                    inputTxt: '',
+                    updateQuestContent() { blankUpdated = true; },
+                    buttons: [],
+                    questionModel: {
+                        questionId: 'q_dientu_32',
+                        questionDescription: { content: 'Fill in the blank:' },
+                        questionContent: { content: 'Three _____ later they won.', maxInput: 5 }
+                    }
+                };
+                const submitComp32 = new DtBtn(6, [{ customEventData: '', emit() { blankSubmittedVal = dtComp.inputTxt; } }]);
+                submitComp32.node = submitNode32;
+                submitNode32._components = [submitComp32];
+                submitNode32.getComponent = () => submitComp32;
+                dtComp.buttons = [submitComp32];
+                window.IOE.state.correctAnswers.set('q_dientu_32', 'years');
+                window.cc = {
+                    winSize: { width: 1015, height: 955 },
+                    Button: DtBtn,
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e, ev.customEventData]); } } },
+                    director: {
+                        getRunningScene: () => ({
+                            active: false, activeInHierarchy: true,
+                            children: [{ active: true, activeInHierarchy: true, _components: [dtComp], children: [submitNode32] }]
+                        })
+                    }
+                };
+                const dtOk = await window.IOE.canvas.solveCanvasGame();
+                delete window.cc;
+                log('32. Live DienTuQuestion populates inputTxt matching maxInput & clicks btnIdx 6 submit',
+                    dtOk === true && blankUpdated === true && blankSubmittedVal === 'years');
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 32;
+                const allPassed = failCount === 0 && passCount >= 34;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

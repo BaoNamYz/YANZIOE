@@ -1,4 +1,4 @@
-/* YANZIOE VIP v1.2.4 */
+/* YANZIOE VIP v1.2.5 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     if (_w.__YANZIOE_BOOTED__) return;
@@ -78,7 +78,7 @@
     }
 
     async function requestExternal(url, options = {}) {
-        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;
+        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text', multipartAudioBase64 = '', whisperModel = '' } = options;
 
         // Channel 1: Extension MV3 Background Bridge (zero CSP/CORS restrictions)
         if (document.documentElement?.dataset?.ioeBridge === '1') {
@@ -98,7 +98,7 @@
                 window.postMessage({
                     type: 'IOE_BRIDGE_FETCH_REQ',
                     id,
-                    payload: { url, method, headers, body, responseType }
+                    payload: { url, method, headers, body, responseType, multipartAudioBase64, whisperModel }
                 }, '*');
             });
             if (bridgeRes) {
@@ -132,7 +132,26 @@
         const ctrl = new AbortController();
         const tm = nativeSetTimeout(() => ctrl.abort(), timeoutMs);
         try {
-            const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
+            const cleanHeaders = { ...headers };
+            let fetchBody = body;
+            if (multipartAudioBase64) {
+                const binStr = atob(multipartAudioBase64);
+                const bytes = new Uint8Array(binStr.length);
+                for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+                const fd = new FormData();
+                fd.append('file', new Blob([bytes], { type: 'audio/mpeg' }), 'question.mp3');
+                fd.append('model', whisperModel || 'whisper-large-v3-turbo');
+                fetchBody = fd;
+                delete cleanHeaders['Content-Type'];
+            }
+            const r = await fetch(url, { method, headers: cleanHeaders, body: fetchBody, signal: ctrl.signal });
+            if (responseType === 'base64' && typeof r.arrayBuffer === 'function') {
+                const buf = await r.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                let bin = '';
+                for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+                return { ok: r.ok, status: r.status, text: '', base64: btoa(bin), contentType: r.headers?.get?.('content-type') || 'audio/mpeg' };
+            }
             let text = '';
             if (typeof r.text === 'function') text = await r.text();
             else if (typeof r.json === 'function') text = JSON.stringify(await r.json());
@@ -149,7 +168,7 @@
     }
 
     const ioeState = {
-        version: '1.2.4',
+        version: '1.2.5',
         events,
         toast,
         delay,
@@ -1085,7 +1104,7 @@
         return found;
     }
 
-    async function callGeminiApi(apiKey, prompt, expectJson = true) {
+    async function callGeminiApi(apiKey, prompt, expectJson = true, inlineParts = []) {
         const cacheKey = `gemini:${String(apiKey || '').slice(0, 10)}`;
         const initialModels = discoveredModelsCache.get(cacheKey)?.models || [
             'gemini-3.8-flash',
@@ -1095,6 +1114,8 @@
             'gemini-2.5-flash-lite'
         ];
 
+        const contentParts = [{ text: prompt }, ...(Array.isArray(inlineParts) ? inlineParts : [])];
+
         async function tryList(models) {
             let authFatal = false;
             for (const m of models) {
@@ -1103,7 +1124,7 @@
                     const genCfg = { temperature: 0.1, maxOutputTokens: 1000 };
                     if (expectJson) genCfg.responseMimeType = 'application/json';
                     const r = await extRequestJson(endpoint, 'POST', { 'Content-Type': 'application/json' }, {
-                        contents: [{ parts: [{ text: prompt }] }],
+                        contents: [{ parts: contentParts }],
                         generationConfig: genCfg
                     }, 8500);
 
@@ -1203,12 +1224,39 @@
         return cfg || 'gemini';
     }
 
-    async function callAiRaw(prompt) {
+    async function fetchMediaBase64(url) {
+        if (!url || !IOE.net?.requestExternal) return null;
+        try {
+            const r = await IOE.net.requestExternal(url, { method: 'GET', responseType: 'base64', timeoutMs: 12000 });
+            if (r?.ok && r.base64) return { base64: r.base64, contentType: r.contentType || '' };
+        } catch (e) {}
+        return null;
+    }
+
+    async function transcribeAudioWithGroq(apiKey, audioBase64) {
+        if (!audioBase64 || !IOE.net?.requestExternal) return '';
+        try {
+            const r = await IOE.net.requestExternal('https://api.groq.com/openai/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+                multipartAudioBase64: audioBase64,
+                whisperModel: 'whisper-large-v3-turbo',
+                timeoutMs: 12000
+            });
+            if (r?.ok && r.text) {
+                const j = JSON.parse(r.text);
+                return String(j?.text || '').trim();
+            }
+        } catch (e) {}
+        return '';
+    }
+
+    async function callAiRaw(prompt, inlineParts = []) {
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) { lastAiError = 'Chưa nhập API Key'; return null; }
         const provider = detectProvider(apiKey);
         if (provider === 'gemini') {
-            return await callGeminiApi(apiKey, prompt, true);
+            return await callGeminiApi(apiKey, prompt, true, inlineParts);
         }
         if (provider === 'groq') {
             return await callOpenAiCompat('https://api.groq.com/openai/v1/chat/completions', apiKey, [
@@ -1231,6 +1279,16 @@
         let ans = String(rawAns || '').trim();
         if (!ans || !Array.isArray(options) || options.length === 0) return ans;
         const cleanOpts = options.map(stripOptionPrefix);
+        // Handle True/False normalization when options are explicitly True & False
+        if (cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o))) {
+            const lo = ans.toLowerCase();
+            if (/^(true|đúng|yes|1|t)$/i.test(lo) || (cleanOpts[0].toLowerCase() === 'true' && /^a\.?$/i.test(lo)) || (cleanOpts[1].toLowerCase() === 'true' && /^b\.?$/i.test(lo))) {
+                return cleanOpts.find(o => /^true$/i.test(o)) || 'True';
+            }
+            if (/^(false|sai|no|0|f)$/i.test(lo) || (cleanOpts[0].toLowerCase() === 'false' && /^a\.?$/i.test(lo)) || (cleanOpts[1].toLowerCase() === 'false' && /^b\.?$/i.test(lo))) {
+                return cleanOpts.find(o => /^false$/i.test(o)) || 'False';
+            }
+        }
         // Handle single option letter "A", "B", "C", "D" or "A."
         const mLet = /^([A-Da-d])\.?$/.exec(ans);
         if (mLet) {
@@ -1240,9 +1298,10 @@
         return ans;
     }
 
-    async function solveWithAi(qId, qText, options = [], taskHint = '') {
+    async function solveWithAi(qId, qText, options = [], taskHint = '', mediaOpts = null) {
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) return null;
+        const provider = detectProvider(apiKey);
 
         const wrongList = getWrongAnswers(qId);
         const wrongNote = wrongList.length ? `\nKnown WRONG options (NEVER pick these): ${wrongList.join(', ')}` : '';
@@ -1251,19 +1310,44 @@
             ? `\nOptions:\n${cleanOpts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n')}`
             : '';
 
+        const inlineParts = [];
+        let audioTranscriptNote = '';
+        if (mediaOpts?.audioUrl) {
+            const media = await fetchMediaBase64(mediaOpts.audioUrl);
+            if (media?.base64) {
+                if (provider === 'gemini') {
+                    inlineParts.push({ inlineData: { mimeType: media.contentType || 'audio/mpeg', data: media.base64 } });
+                } else if (provider === 'groq') {
+                    const tr = await transcribeAudioWithGroq(apiKey, media.base64);
+                    if (tr) audioTranscriptNote = `\nListening Audio Transcript: "${tr}"`;
+                }
+            }
+        }
+        if (mediaOpts?.imageUrl && provider === 'gemini') {
+            const img = await fetchMediaBase64(mediaOpts.imageUrl);
+            if (img?.base64) {
+                inlineParts.push({ inlineData: { mimeType: img.contentType || 'image/jpeg', data: img.base64 } });
+            }
+        }
+
+        const isTrueFalse = cleanOpts.length === 2 && cleanOpts.some(o => /^true$/i.test(o)) && cleanOpts.some(o => /^false$/i.test(o));
         let instruction = '';
         if (taskHint === 'reorder') {
             instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
         } else if (taskHint === 'pairs') {
             instruction = `Task: Match ALL ${cleanOpts.length} cards below into ${Math.floor(cleanOpts.length / 2)} exact pairs.\nCards:\n${cleanOpts.map((c, i) => `${i}: ${c}`).join('\n')}\nRules: Return ONLY raw JSON {"answer": [["card1", "card2"], ...]} with exact card texts.`;
+        } else if (taskHint === 'blank' && mediaOpts?.maxInput > 0) {
+            instruction = `Task: Fill the missing letter(s) represented by underscores ("_").\nRequired character length: EXACTLY ${mediaOpts.maxInput} character(s).\nIf the whole word is underscores (e.g. ____), return the full ${mediaOpts.maxInput}-letter English word; if partial letters exist (e.g. t_m_rrow), return ONLY the ${mediaOpts.maxInput} missing letter(s) in order.`;
+        } else if (isTrueFalse) {
+            instruction = `Task: Decide whether the statement is True or False (use the Listening Audio or Audio Transcript if provided, otherwise verify the factual/grammar statement).\nRules: Answer MUST be strictly "True" or "False". NEVER repeat the statement sentence.`;
         } else {
             instruction = `Solve this Vietnamese Olympic English (IOE) question accurately.\nIf multiple choice, return the exact winning option text (NOT just letter A/B/C/D if text is shown).\nIf fill in the blank, return ONLY the missing word or phrase.\nIf word reordering, return ONLY the full reordered English sentence.`;
         }
 
-        const prompt = `${instruction}\nReturn ONLY raw JSON: {"answer": "..."} with NO markdown.\nQuestion: ${qText}${optsText}${wrongNote}`;
+        const prompt = `${instruction}\nReturn ONLY raw JSON: {"answer": "..."} with NO markdown.\nQuestion: ${qText}${audioTranscriptNote}${optsText}${wrongNote}`;
 
         try {
-            const raw = await callAiRaw(prompt);
+            const raw = await callAiRaw(prompt, inlineParts);
             if (!raw) return null;
             const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
             let extracted = '';
@@ -1528,7 +1612,7 @@
     }
 
     /* ================= 5. SOLVE ORCHESTRATOR ================= */
-    async function solveQuestion(qId, qText, options = [], taskHint = '') {
+    async function solveQuestion(qId, qText, options = [], taskHint = '', mediaOpts = null) {
         if (!checkLicensed()) {
             IOE.license?.showLicenseModal?.('Vui lòng kích hoạt Key YANZ-IOE trước khi giải bài!');
             return null;
@@ -1583,7 +1667,7 @@
         }
 
         IOE.toast('🔍 Đang giải câu hỏi...', 1000);
-        const aiAns = await solveWithAi(qId, qText, options, taskHint);
+        const aiAns = await solveWithAi(qId, qText, options, taskHint, mediaOpts);
         if (aiAns && !isAnswerWrong(qId, aiAns)) {
             const thinking = generate0msThinking(qText, aiAns, 'Tier 2 (AI)');
             const meta = { qId, qText, answer: aiAns, tier: 'Tier 2 (AI)', thinking };
@@ -2498,7 +2582,7 @@
                 if (!gamePlayComp && (c.btnSubmit || c.quest || typeof c.findQuestModel === 'function')) gamePlayComp = c;
                 if (!reorderComp && Array.isArray(c.listText) && Array.isArray(c.listAnswer)) reorderComp = c;
                 if (!matchComp && c.ctnCross && (c.rootGame || c.data?.game?.question)) matchComp = c;
-                if (!textComp && c.questionModel && Array.isArray(c.buttons)) textComp = c;
+                if (!textComp && c.questionModel && Array.isArray(c.buttons) && c.node?.activeInHierarchy !== false) textComp = c;
             }
             const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
             for (const x of ch) walk(x, d + 1);
@@ -2878,14 +2962,15 @@
                         !/^(nộp bài|trả lời|tiếp tục|bỏ qua|nghe lại|submit|next|ok|start|answer|score)$/i.test(t);
                 });
                 if (textComp?.buttons?.length) {
-                    const compBtns = textComp.buttons
-                        .filter(b => b?.node && canTraverseNode(b.node) && b.btnIdx !== 6 && (b.btnTxt || b.btnContent || getNodeText(b.node)))
-                        .map(b => ({
-                            node: b.node,
-                            text: String(b.btnTxt || b.btnContent || getNodeText(b.node)).replace(/<[^>]+>/g, '').trim(),
-                            btnComp: b,
-                            name: b.node.name || ''
-                        }))
+                    const activeBtns = textComp.buttons.filter(b => b?.node && canTraverseNode(b.node) && b.btnIdx !== 6);
+                    const isTfButtons = activeBtns.filter(b => (b.btnIdx === 0 || b.btnIdx === 1) && !(b.btnTxt || b.btnContent || getNodeText(b.node))).length === 2;
+                    const compBtns = activeBtns
+                        .map(b => {
+                            let txt = String(b.btnTxt || b.btnContent || getNodeText(b.node) || '').replace(/<[^>]+>/g, '').trim();
+                            if (!txt && isTfButtons) txt = b.btnIdx === 1 ? 'True' : (b.btnIdx === 0 ? 'False' : '');
+                            else if (!txt && b.btnUrl) txt = `[Image: ${String(b.btnUrl).split('/').pop()}]`;
+                            return { node: b.node, text: txt, btnComp: b, name: b.node.name || '' };
+                        })
                         .filter(b => b.text);
                     if (compBtns.length >= 2) optBtns = compBtns;
                 }
@@ -2896,19 +2981,47 @@
                     .map(x => x.text.trim())
                     .filter(t => !isHudChromeText(t) && !optSet.has(t) && !/^(id:|round:|score|\d+(\.\d+)?)$/i.test(t));
 
+                const qModel = textComp?.questionModel;
+                const descPart = qModel?.questionDescription;
+                const contPart = qModel?.questionContent;
+                const isUrlStr = (s) => /^https?:\/\//i.test(String(s || '').trim());
+                const modelText = [
+                    (descPart && !descPart.hasAudio && !descPart.hasImage && !isUrlStr(descPart.content)) ? descPart.content : '',
+                    (contPart && !contPart.hasAudio && !contPart.hasImage && !isUrlStr(contPart.content)) ? contPart.content : ''
+                ].filter(Boolean).join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
                 const spriteClues = extractSceneSpriteClues(cocosScene);
-                const modelText = [textComp?.questionModel?.questionDescription?.content, textComp?.questionModel?.questionContent?.content]
-                    .filter(Boolean).join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
                 let qPrompt = modelText || stemTexts.join(' ').trim() || cocosTexts.map(x => x.text).join(' ').trim();
                 if (spriteClues.length > 0) {
                     qPrompt += ` [Image hints: ${spriteClues.slice(0, 5).join(', ')}]`;
                 }
 
-                const qId = textComp?.questionModel?.questionId ?? null;
+                const audioUrl = String(textComp?.remoteSound || (descPart?.hasAudio && descPart.content) || (contPart?.hasAudio && contPart.content) || '').replace(/\.MP3$/i, '.mp3').trim();
+                const imageUrl = String((descPart?.hasImage && descPart.content) || (contPart?.hasImage && contPart.content) || '').trim();
+                const maxInput = Number(contPart?.maxInput || 0);
+
+                const qId = qModel?.questionId ?? null;
                 const optStrings = optBtns.map(b => b.text);
-                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings);
+                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings, maxInput > 0 ? 'blank' : '', { audioUrl, imageUrl, maxInput });
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
+
+                    // a0. Native IOE ContentComponent fill-in-the-blank (inputTxt + maxInput + btnIdx 6)
+                    if (maxInput > 0 && typeof textComp?.inputTxt === 'string') {
+                        const rawLetters = ansStr.replace(/[^a-zA-Z0-9']/g, '');
+                        const finalTyped = (rawLetters.length === maxInput ? rawLetters : ansStr.trim()).slice(0, maxInput);
+                        textComp.inputTxt = finalTyped;
+                        try { textComp.updateQuestContent?.(); } catch (e) {}
+                        IOE.toast(`✍️ Đã điền đáp án (${finalTyped.length}/${maxInput}): ${finalTyped}`, 1400);
+                        const submitBtnComp = textComp.buttons?.find?.(b => b.btnIdx === 6 && b.node && canTraverseNode(b.node));
+                        await IOE.delay?.(220);
+                        if (submitBtnComp?.node) {
+                            await clickCocosNode(submitBtnComp.node);
+                        } else if (typeof textComp.onKeyEnterPress === 'function') {
+                            textComp.onKeyEnterPress();
+                        }
+                        return true;
+                    }
 
                     // a. Check Cocos EditBox + visible DOM input overlay
                     const cc = win.cc;

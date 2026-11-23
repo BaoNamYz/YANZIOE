@@ -598,7 +598,7 @@
                 if (!gamePlayComp && (c.btnSubmit || c.quest || typeof c.findQuestModel === 'function')) gamePlayComp = c;
                 if (!reorderComp && Array.isArray(c.listText) && Array.isArray(c.listAnswer)) reorderComp = c;
                 if (!matchComp && c.ctnCross && (c.rootGame || c.data?.game?.question)) matchComp = c;
-                if (!textComp && c.questionModel && Array.isArray(c.buttons)) textComp = c;
+                if (!textComp && c.questionModel && Array.isArray(c.buttons) && c.node?.activeInHierarchy !== false) textComp = c;
             }
             const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
             for (const x of ch) walk(x, d + 1);
@@ -978,14 +978,15 @@
                         !/^(nộp bài|trả lời|tiếp tục|bỏ qua|nghe lại|submit|next|ok|start|answer|score)$/i.test(t);
                 });
                 if (textComp?.buttons?.length) {
-                    const compBtns = textComp.buttons
-                        .filter(b => b?.node && canTraverseNode(b.node) && b.btnIdx !== 6 && (b.btnTxt || b.btnContent || getNodeText(b.node)))
-                        .map(b => ({
-                            node: b.node,
-                            text: String(b.btnTxt || b.btnContent || getNodeText(b.node)).replace(/<[^>]+>/g, '').trim(),
-                            btnComp: b,
-                            name: b.node.name || ''
-                        }))
+                    const activeBtns = textComp.buttons.filter(b => b?.node && canTraverseNode(b.node) && b.btnIdx !== 6);
+                    const isTfButtons = activeBtns.filter(b => (b.btnIdx === 0 || b.btnIdx === 1) && !(b.btnTxt || b.btnContent || getNodeText(b.node))).length === 2;
+                    const compBtns = activeBtns
+                        .map(b => {
+                            let txt = String(b.btnTxt || b.btnContent || getNodeText(b.node) || '').replace(/<[^>]+>/g, '').trim();
+                            if (!txt && isTfButtons) txt = b.btnIdx === 1 ? 'True' : (b.btnIdx === 0 ? 'False' : '');
+                            else if (!txt && b.btnUrl) txt = `[Image: ${String(b.btnUrl).split('/').pop()}]`;
+                            return { node: b.node, text: txt, btnComp: b, name: b.node.name || '' };
+                        })
                         .filter(b => b.text);
                     if (compBtns.length >= 2) optBtns = compBtns;
                 }
@@ -996,19 +997,47 @@
                     .map(x => x.text.trim())
                     .filter(t => !isHudChromeText(t) && !optSet.has(t) && !/^(id:|round:|score|\d+(\.\d+)?)$/i.test(t));
 
+                const qModel = textComp?.questionModel;
+                const descPart = qModel?.questionDescription;
+                const contPart = qModel?.questionContent;
+                const isUrlStr = (s) => /^https?:\/\//i.test(String(s || '').trim());
+                const modelText = [
+                    (descPart && !descPart.hasAudio && !descPart.hasImage && !isUrlStr(descPart.content)) ? descPart.content : '',
+                    (contPart && !contPart.hasAudio && !contPart.hasImage && !isUrlStr(contPart.content)) ? contPart.content : ''
+                ].filter(Boolean).join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
                 const spriteClues = extractSceneSpriteClues(cocosScene);
-                const modelText = [textComp?.questionModel?.questionDescription?.content, textComp?.questionModel?.questionContent?.content]
-                    .filter(Boolean).join(' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
                 let qPrompt = modelText || stemTexts.join(' ').trim() || cocosTexts.map(x => x.text).join(' ').trim();
                 if (spriteClues.length > 0) {
                     qPrompt += ` [Image hints: ${spriteClues.slice(0, 5).join(', ')}]`;
                 }
 
-                const qId = textComp?.questionModel?.questionId ?? null;
+                const audioUrl = String(textComp?.remoteSound || (descPart?.hasAudio && descPart.content) || (contPart?.hasAudio && contPart.content) || '').replace(/\.MP3$/i, '.mp3').trim();
+                const imageUrl = String((descPart?.hasImage && descPart.content) || (contPart?.hasImage && contPart.content) || '').trim();
+                const maxInput = Number(contPart?.maxInput || 0);
+
+                const qId = qModel?.questionId ?? null;
                 const optStrings = optBtns.map(b => b.text);
-                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings);
+                const meta = await IOE.question?.solveQuestion(qId, qPrompt, optStrings, maxInput > 0 ? 'blank' : '', { audioUrl, imageUrl, maxInput });
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
+
+                    // a0. Native IOE ContentComponent fill-in-the-blank (inputTxt + maxInput + btnIdx 6)
+                    if (maxInput > 0 && typeof textComp?.inputTxt === 'string') {
+                        const rawLetters = ansStr.replace(/[^a-zA-Z0-9']/g, '');
+                        const finalTyped = (rawLetters.length === maxInput ? rawLetters : ansStr.trim()).slice(0, maxInput);
+                        textComp.inputTxt = finalTyped;
+                        try { textComp.updateQuestContent?.(); } catch (e) {}
+                        IOE.toast(`✍️ Đã điền đáp án (${finalTyped.length}/${maxInput}): ${finalTyped}`, 1400);
+                        const submitBtnComp = textComp.buttons?.find?.(b => b.btnIdx === 6 && b.node && canTraverseNode(b.node));
+                        await IOE.delay?.(220);
+                        if (submitBtnComp?.node) {
+                            await clickCocosNode(submitBtnComp.node);
+                        } else if (typeof textComp.onKeyEnterPress === 'function') {
+                            textComp.onKeyEnterPress();
+                        }
+                        return true;
+                    }
 
                     // a. Check Cocos EditBox + visible DOM input overlay
                     const cc = win.cc;
