@@ -184,78 +184,178 @@
         return null;
     }
 
-    /* ================= 4. TIER 2: AI SOLVER (GEMINI 2.5/2.0 / GROQ / OPENROUTER) ================= */
+    /* ================= 4. TIER 2: AI SOLVER (AUTO-DISCOVERING GEMINI / GROQ / OPENROUTER) ================= */
     let lastAiError = '';
+    const discoveredModelsCache = new Map();
 
-    async function extPostJson(endpoint, headers, payloadObj, timeoutMs = 13000) {
+    async function extRequestJson(endpoint, method = 'POST', headers = {}, payloadObj = null, timeoutMs = 8500) {
         const reqExt = IOE.net?.requestExternal;
-        const bodyStr = JSON.stringify(payloadObj);
+        const bodyStr = (method === 'GET' || payloadObj === null) ? undefined : JSON.stringify(payloadObj);
         if (reqExt) {
-            return await reqExt(endpoint, { method: 'POST', headers, body: bodyStr, timeoutMs });
+            return await reqExt(endpoint, { method, headers, body: bodyStr, timeoutMs });
         }
         const ctrl = new AbortController();
         const tm = IOE.timers?.setTimeout ? IOE.timers.setTimeout(() => ctrl.abort(), timeoutMs) : setTimeout(() => ctrl.abort(), timeoutMs);
         try {
-            const res = await fetch(endpoint, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+            const init = { method, headers, signal: ctrl.signal };
+            if (bodyStr !== undefined) init.body = bodyStr;
+            const res = await fetch(endpoint, init);
             return { ok: res.ok, status: res.status, text: await res.text() };
         } finally {
             if (IOE.timers?.clearTimeout) IOE.timers.clearTimeout(tm); else clearTimeout(tm);
         }
     }
 
-    async function callGeminiApi(apiKey, prompt, expectJson = true) {
-        const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
-        for (const m of models) {
-            try {
-                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
-                const genCfg = { temperature: 0.1, maxOutputTokens: 1000 };
-                if (expectJson) genCfg.responseMimeType = 'application/json';
-                const r = await extPostJson(endpoint, { 'Content-Type': 'application/json' }, {
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: genCfg
-                }, 8500);
+    async function discoverLiveModels(provider, apiKey) {
+        const cacheKey = `${provider}:${String(apiKey || '').slice(0, 10)}`;
+        const cached = discoveredModelsCache.get(cacheKey);
+        if (cached && (Date.now() - cached.ts < 600000)) return cached.models;
 
-                if (r && r.ok && r.text) {
+        let found = [];
+        try {
+            if (provider === 'gemini') {
+                const r = await extRequestJson(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`, 'GET', {}, null, 6000);
+                if (r?.ok && r.text) {
                     const j = JSON.parse(r.text);
-                    const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (txt) { lastAiError = ''; return txt; }
-                } else if (r) {
-                    lastAiError = `Gemini ${m}: HTTP ${r.status} ${(r.text || r.error || '').slice(0, 120)}`;
-                    if (r.status === 400 || r.status === 401 || r.status === 403) break;
+                    found = (j.models || [])
+                        .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+                        .map(m => String(m.name || '').replace(/^models\//, ''))
+                        .filter(n => /flash/i.test(n) && !/(tts|live|image|audio|embedding|vision)/i.test(n))
+                        .sort((a, b) => b.localeCompare(a))
+                        .slice(0, 5);
                 }
-            } catch (e) {
-                lastAiError = `Gemini ${m}: ${e?.message || e}`;
+            } else if (provider === 'groq') {
+                const r = await extRequestJson('https://api.groq.com/openai/v1/models', 'GET', { 'Authorization': `Bearer ${apiKey}` }, null, 6000);
+                if (r?.ok && r.text) {
+                    const j = JSON.parse(r.text);
+                    const allIds = (j.data || [])
+                        .map(m => String(m.id || ''))
+                        .filter(id => id && !/(whisper|tts|guard|safeguard|orpheus|embed)/i.test(id));
+                    const prio = (id) => (/llama-3\.3|gpt-oss-120b/.test(id) ? 0 : /gpt-oss|qwen|llama-3/.test(id) ? 1 : 2);
+                    found = allIds.sort((a, b) => prio(a) - prio(b)).slice(0, 6);
+                }
+            } else if (provider === 'openrouter') {
+                const r = await extRequestJson('https://openrouter.ai/api/v1/models', 'GET', {}, null, 6000);
+                if (r?.ok && r.text) {
+                    const j = JSON.parse(r.text);
+                    found = (j.data || [])
+                        .map(m => String(m.id || ''))
+                        .filter(id => id.endsWith(':free') && !/(embed|whisper|tts)/i.test(id))
+                        .slice(0, 5);
+                }
+            }
+        } catch (e) {}
+
+        if (found.length > 0) {
+            discoveredModelsCache.set(cacheKey, { ts: Date.now(), models: found });
+        }
+        return found;
+    }
+
+    async function callGeminiApi(apiKey, prompt, expectJson = true) {
+        const cacheKey = `gemini:${String(apiKey || '').slice(0, 10)}`;
+        const initialModels = discoveredModelsCache.get(cacheKey)?.models || [
+            'gemini-3.8-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-3.6-flash',
+            'gemini-2.5-flash',
+            'gemini-2.5-flash-lite'
+        ];
+
+        async function tryList(models) {
+            let authFatal = false;
+            for (const m of models) {
+                try {
+                    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
+                    const genCfg = { temperature: 0.1, maxOutputTokens: 1000 };
+                    if (expectJson) genCfg.responseMimeType = 'application/json';
+                    const r = await extRequestJson(endpoint, 'POST', { 'Content-Type': 'application/json' }, {
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: genCfg
+                    }, 8500);
+
+                    if (r && r.ok && r.text) {
+                        const j = JSON.parse(r.text);
+                        const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (txt) { lastAiError = ''; return { txt }; }
+                    } else if (r) {
+                        lastAiError = `Gemini ${m}: HTTP ${r.status} ${(r.text || r.error || '').slice(0, 120)}`;
+                        if (r.status === 401 || r.status === 403 || (r.status === 400 && /API key/i.test(r.text || ''))) {
+                            authFatal = true;
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    lastAiError = `Gemini ${m}: ${e?.message || e}`;
+                }
+            }
+            return { txt: null, authFatal };
+        }
+
+        const first = await tryList(initialModels);
+        if (first.txt) return first.txt;
+        if (!first.authFatal) {
+            const live = await discoverLiveModels('gemini', apiKey);
+            const unseen = live.filter(m => !initialModels.includes(m));
+            if (unseen.length > 0) {
+                const retry = await tryList(unseen);
+                if (retry.txt) return retry.txt;
             }
         }
         return null;
     }
 
-    async function callOpenAiCompat(endpoint, apiKey, models, prompt, useJsonFormat = true) {
-        for (const model of models) {
-            try {
-                const bodyObj = {
-                    model,
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.1
-                };
-                if (useJsonFormat && !model.includes('gemma')) {
-                    bodyObj.response_format = { type: 'json_object' };
-                }
-                const r = await extPostJson(endpoint, {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                }, bodyObj, 8500);
+    async function callOpenAiCompat(endpoint, apiKey, defaultModels, prompt, useJsonFormat = true, providerTag = 'groq') {
+        const cacheKey = `${providerTag}:${String(apiKey || '').slice(0, 10)}`;
+        const initialModels = discoveredModelsCache.get(cacheKey)?.models || defaultModels;
 
-                if (r && r.ok && r.text) {
-                    const j = JSON.parse(r.text);
-                    const txt = j?.choices?.[0]?.message?.content || '';
-                    if (txt) { lastAiError = ''; return txt; }
-                } else if (r) {
-                    lastAiError = `${model}: HTTP ${r.status} ${(r.text || r.error || '').slice(0, 120)}`;
-                    if (r.status === 401 || r.status === 403) break;
+        async function tryList(models) {
+            let authFatal = false;
+            for (const model of models) {
+                let wantJson = useJsonFormat && !/gemma|free/i.test(model);
+                for (let pass = 0; pass < 2; pass++) {
+                    try {
+                        const bodyObj = {
+                            model,
+                            messages: [{ role: 'user', content: prompt }],
+                            temperature: 0.1
+                        };
+                        if (wantJson) bodyObj.response_format = { type: 'json_object' };
+                        const r = await extRequestJson(endpoint, 'POST', {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        }, bodyObj, 8500);
+
+                        if (r && r.ok && r.text) {
+                            const j = JSON.parse(r.text);
+                            const txt = j?.choices?.[0]?.message?.content || '';
+                            if (txt) { lastAiError = ''; return { txt }; }
+                        } else if (r) {
+                            lastAiError = `${model}: HTTP ${r.status} ${(r.text || r.error || '').slice(0, 120)}`;
+                            if (r.status === 400 && wantJson && /response_format|json/i.test(r.text || '')) {
+                                wantJson = false;
+                                continue;
+                            }
+                            if (r.status === 401 || r.status === 403) { authFatal = true; break; }
+                        }
+                    } catch (e) {
+                        lastAiError = `${model}: ${e?.message || e}`;
+                    }
+                    break;
                 }
-            } catch (e) {
-                lastAiError = `${model}: ${e?.message || e}`;
+                if (authFatal) break;
+            }
+            return { txt: null, authFatal };
+        }
+
+        const first = await tryList(initialModels);
+        if (first.txt) return first.txt;
+        if (!first.authFatal) {
+            const live = await discoverLiveModels(providerTag, apiKey);
+            const unseen = live.filter(m => !initialModels.includes(m));
+            if (unseen.length > 0) {
+                const retry = await tryList(unseen);
+                if (retry.txt) return retry.txt;
             }
         }
         return null;
@@ -280,14 +380,18 @@
         if (provider === 'groq') {
             return await callOpenAiCompat('https://api.groq.com/openai/v1/chat/completions', apiKey, [
                 'llama-3.3-70b-versatile',
+                'openai/gpt-oss-120b',
+                'openai/gpt-oss-20b',
+                'qwen/qwen3-32b',
                 'llama-3.1-8b-instant'
-            ], prompt, true);
+            ], prompt, true, 'groq');
         }
         return await callOpenAiCompat('https://openrouter.ai/api/v1/chat/completions', apiKey, [
-            'meta-llama/llama-3.3-70b-instruct:free',
-            'google/gemma-3-27b-it:free',
-            'openai/gpt-4o-mini'
-        ], prompt, true);
+            'openrouter/free',
+            'google/gemma-4-31b-it:free',
+            'google/gemma-4-26b-a4b-it:free',
+            'nvidia/nemotron-3.5-super-vl:free'
+        ], prompt, true, 'openrouter');
     }
 
     function resolveOptionAnswer(rawAns, options = []) {
@@ -655,7 +759,11 @@
             return meta;
         } else if (lastAiError) {
             IOE.appendLog?.(`❌ Lỗi AI: ${lastAiError}`);
-            IOE.toast(`⚠️ AI lỗi: ${lastAiError.slice(0, 75)}`, 2800);
+            const now = Date.now();
+            if (!IOE.state._lastAiToastAt || (now - IOE.state._lastAiToastAt) > 6000) {
+                IOE.state._lastAiToastAt = now;
+                IOE.toast(`⚠️ AI lỗi: ${lastAiError.slice(0, 75)}`, 2800);
+            }
         }
 
         return null;

@@ -609,8 +609,39 @@
                 log('29. Traverses serialized cc.Scene (active=false, activeInHierarchy=true) & pairs Game12 (Ghép Cặp) accurately',
                     diag29.cocosTextCount >= 6 && g12Ok === true && matchedPairs.length === 3);
 
+                // Test 30: Groq 404 live model auto-discovery fallback + lobby round card rejection
+                const prevKey30 = window.IOE.featureConfigs.apiKey;
+                const prevFetch30 = window.fetch;
+                window.IOE.featureConfigs.apiKey = 'gsk_test_auto_discover_30';
+                let discoveredUsed = false;
+                window.fetch = async (url, opts) => {
+                    const u = String(url);
+                    if (u.includes('/openai/v1/models')) {
+                        return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ id: 'groq-live-test-model' }] }) };
+                    }
+                    const b = JSON.parse(opts?.body || '{}');
+                    if (b.model === 'groq-live-test-model') {
+                        discoveredUsed = true;
+                        return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: '{"answer":"aurora"}' } }] }) };
+                    }
+                    return { ok: false, status: 404, text: async () => JSON.stringify({ error: { message: 'The model does not exist' } }) };
+                };
+                const discRes = await window.IOE.question.solveQuestion('q_groq_404', 'Which phenomenon creates polar lights?', ['aurora', 'nebula']);
+                window.fetch = prevFetch30;
+                window.IOE.featureConfigs.apiKey = prevKey30;
+
+                const lobbyHost = document.createElement('div');
+                lobbyHost.innerHTML = `<div class="card-round"><h3>Vòng Tự luyện 19</h3><button type="button">Vào làm bài</button><button type="button">Thể lệ</button></div>`;
+                document.body.appendChild(lobbyHost);
+                document.getElementById('test-sandbox').style.display = 'none';
+                const lobbyDetected = window.IOE.auto.extractGenericDomQuestion();
+                document.getElementById('test-sandbox').style.display = '';
+                lobbyHost.remove();
+                log('30. Groq auto-discovers live models on HTTP 404 & ignores "Vòng Tự luyện" lobby cards',
+                    discoveredUsed && discRes?.answer === 'aurora' && lobbyDetected === null);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 31;
+                const allPassed = failCount === 0 && passCount >= 32;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {

@@ -55,7 +55,21 @@
         return !s || /^(nộp bài|thoát|bỏ qua|tiếp tục|câu tiếp|câu sau|nghe lại|submit|next|skip|close|back|exit|ok|start|replay|play)$/.test(s);
     }
 
+    function isLobbyNavigationText(txt) {
+        const s = String(txt || '').trim().toLowerCase();
+        return /^(vào thi|vào tự luyện|làm bài|xem lại|xem kết quả|thể lệ|chi tiết|bảng xếp hạng|đăng nhập|đăng ký|nâng cấp|mua gói|bắt đầu ngay|khám phá|tìm hiểu thêm|trở về|trang chủ)/.test(s);
+    }
+
+    function isLobbyDashboardPage() {
+        try {
+            const path = String(location.pathname || '').toLowerCase();
+            if (!/^\/($|trang-chu|hoc-sinh(\/tu-luyen|\/ket-qua|\/lich-su|\/bang-xep-hang|\/tai-khoan)?|tin-tuc|gioi-thieu|huong-dan)\/?$/.test(path)) return false;
+            return !document.querySelector('.question-content, .exam-content, .ioe-exam-card, #question-content, .quiz-question');
+        } catch (e) { return false; }
+    }
+
     function extractGenericDomQuestion() {
+        if (isLobbyDashboardPage()) return null;
         const containers = Array.from(document.querySelectorAll('[class*="exam" i], [class*="question" i], [class*="quiz" i], [class*="card" i], main, #root, section, article'))
             .filter(isElVisible);
         const optSelector = 'button, [role="button"], label, [class*="option" i], [class*="choice" i], [class*="answer" i], [class*="btn" i]';
@@ -71,6 +85,8 @@
                 .filter(isElVisible);
 
             if (dedupChoices.length < 2 && inputs.length === 0 && chips.length < 3) continue;
+            const lobbyChoiceCount = dedupChoices.filter(c => isLobbyNavigationText(c.innerText || c.textContent)).length;
+            if (dedupChoices.length > 0 && lobbyChoiceCount * 2 >= dedupChoices.length) continue;
 
             const choiceSet = new Set(dedupChoices);
             const stemNodes = Array.from(box.querySelectorAll('h1, h2, h3, h4, p, div, span')).filter(el => {
@@ -81,7 +97,7 @@
             });
             const stemEl = stemNodes.find(el => !stemNodes.some(other => other !== el && el.contains(other) && (other.innerText || '').trim().length >= 6)) || stemNodes[0];
             const qText = (stemEl ? (stemEl.innerText || stemEl.textContent) : '').trim();
-            if (qText.length >= 6) {
+            if (qText.length >= 6 && !/^(vòng tự luyện|cấp (trường|xã|phường|huyện|tỉnh|quốc gia)|hành trình cuộc thi|bảng xếp hạng|danh sách vòng)\b/i.test(qText)) {
                 return { qEl: stemEl, scopeRoot: box, qText, choiceEls: dedupChoices, chips };
             }
         }
