@@ -36,7 +36,9 @@
         requestAnimationFrame(frame);
     }
 
-    if (document.readyState === 'loading') {
+    if (global.IOE?.onBodyReady) {
+        global.IOE.onBodyReady(initOneko);
+    } else if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initOneko);
     } else {
         initOneko();

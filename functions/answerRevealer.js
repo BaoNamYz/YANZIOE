@@ -6,6 +6,25 @@
 
     const HUD_ID = 'yanzioe-revealer-hud';
 
+    function copyToClipboard(text) {
+        if (navigator.clipboard?.writeText) {
+            return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+        }
+        return Promise.resolve(fallbackCopy(text));
+    }
+
+    function fallbackCopy(text) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        } catch (e) {}
+    }
+
     function ensureHud() {
         let hud = document.getElementById(HUD_ID);
         if (!hud && document.body) {
@@ -16,7 +35,7 @@
                 bottom: 12px;
                 left: 16px;
                 transform: none;
-                z-index: 9999999;
+                z-index: 2147483645;
                 background: rgba(15, 23, 42, 0.94);
                 backdrop-filter: blur(10px);
                 border: 1px solid rgba(56, 189, 248, 0.45);
@@ -41,7 +60,7 @@
     }
 
     function renderReveal(meta) {
-        if (!meta || !IOE.features?.showAnswers || IOE.features?.streamMode) {
+        if (!meta || !(IOE.state?.licensed || IOE.license?.isLicensed?.()) || !IOE.features?.showAnswers || IOE.features?.streamMode) {
             const hud = document.getElementById(HUD_ID);
             if (hud) hud.style.display = 'none';
             return;
@@ -55,6 +74,8 @@
         const safeThink = IOE.escHtml(meta.thinking || '');
 
         hud.style.display = 'flex';
+        hud.style.maxHeight = '54px';
+        hud.style.overflow = 'hidden';
         hud.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;width:100%;">
                 <div style="display:flex;align-items:center;gap:6px;min-width:0;max-width:calc(100% - 215px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" id="yanzioe-copy-area" title="Nhấn để sao chép">
@@ -71,12 +92,14 @@
         `;
 
         document.getElementById('yanzioe-fill-btn')?.addEventListener('click', () => {
-            if (IOE.auto?.fillAnswer) IOE.auto.fillAnswer(meta.answer);
-            if (IOE.canvas?.typeIntoCanvas) IOE.canvas.typeIntoCanvas(meta.answer);
+            const okDom = IOE.auto?.fillAnswer ? IOE.auto.fillAnswer(meta.answer) : false;
+            if (!okDom && IOE.canvas?.typeIntoCanvas) {
+                IOE.canvas.typeIntoCanvas(meta.answer);
+            }
         });
 
         const copyAction = () => {
-            navigator.clipboard.writeText(meta.answer || '').then(() => {
+            copyToClipboard(meta.answer || '').then(() => {
                 IOE.toast('✓ Đã chép đáp án!', 1200);
             });
         };

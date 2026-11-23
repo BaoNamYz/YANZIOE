@@ -18,6 +18,7 @@ print(f"=== Building YANZIOE VIP v{VERSION} (Full Cocos2d + CreateJS + DOM + Gla
 
 MODULES = [
     'utils/utils.js',
+    'functions/licenseGate.js',
     'functions/oneko.js',
     'functions/questionSpoof.js',
     'functions/canvasEngine.js',
@@ -35,7 +36,15 @@ for rel in MODULES:
     else:
         print(f"[WARN] Missing module: {rel}")
 
-bundle_code = "\n\n".join(bundled_parts)
+raw_bundle = "\n\n".join(bundled_parts)
+bundle_code = f"""/* YANZIOE VIP v{VERSION} */
+(function() {{
+    const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    if (_w.__YANZIOE_BOOTED__) return;
+    _w.__YANZIOE_BOOTED__ = true;
+{raw_bundle}
+}})();
+"""
 
 # 1. Standard YANZIOE.js
 dist_js = ROOT / 'YANZIOE.js'
@@ -45,9 +54,7 @@ print(f"[OK] Generated {dist_js.name} ({len(bundle_code)} bytes)")
 # 2. Userscript header builder
 def make_userscript_header(ver, is_coke=False):
     title = "YANZIOE VIP (CoKey)" if is_coke else "YANZIOE VIP"
-    desc = "Tool tự giải bài và hiển thị gợi ý đáp án Olympic Tiếng Anh IOE.vn (Hỗ trợ Cocos2d-JS, CreateJS Canvas và Web DOM)"
-    if is_coke:
-        desc += " - Bản VIP Glassmorphism không cần nhập API Key"
+    desc = "Tool tự giải bài và hiển thị đáp án Olympic Tiếng Anh IOE.vn (Cocos2d, CreateJS & DOM) - Có License Key YanzBn"
     return f"""// ==UserScript==
 // @name         {title} - IOE.vn Auto Answer & Revealer
 // @namespace    https://yanzbn.shop/
@@ -64,6 +71,7 @@ def make_userscript_header(ver, is_coke=False):
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @connect      yanzbnshop.onrender.com
 // @connect      api-edu.go.vn
 // @connect      ioe.vn
 // @connect      api.groq.com
@@ -76,11 +84,11 @@ def make_userscript_header(ver, is_coke=False):
 
 # 3. Standard YANZIOE.user.js
 dist_user_js = ROOT / 'YANZIOE.user.js'
-dist_user_js.write_text(make_userscript_header(VERSION, False) + bundle_code, encoding='utf-8')
+dist_user_js.write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
 print(f"[OK] Generated {dist_user_js.name}")
 
-# 4. KoKey / Free Standalone files
-coke_header = "/* YANZIOE VIP v" + VERSION + " CoKey (Pre-activated Local CAS & Free Tier) */\n"
+# 4. CoKey Standalone files
+coke_header = "/* YANZIOE VIP v" + VERSION + " CoKey (YanzBn License + Hybrid CAS & AI Solver) */\n"
 dist_coke_min = ROOT / 'yanzioeKoKey.js'
 dist_coke_min.write_text(coke_header + bundle_code, encoding='utf-8')
 
@@ -95,22 +103,56 @@ BRIDGE_JS = """/* YANZIOE Extension Bridge (ISOLATED World) */
     document.documentElement.dataset.ioeBridge = '1';
 
     window.addEventListener('message', function (ev) {
-        if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_REQ') return;
-        const { id, payload } = ev.data;
-        chrome.runtime.sendMessage({ type: 'IOE_FETCH', payload }, function (res) {
-            const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
-            window.postMessage({
-                type: 'IOE_BRIDGE_FETCH_RES',
-                id,
-                payload: err ? { ok: false, status: 0, error: err } : (res || { ok: false, status: 0, error: 'Empty bridge reply' })
-            }, '*');
-        });
+        if (ev.source !== window || !ev.data) return;
+        const d = ev.data;
+        if (d.type === 'IOE_BRIDGE_FETCH_REQ') {
+            chrome.runtime.sendMessage({ type: 'IOE_FETCH', payload: d.payload }, function (res) {
+                const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
+                window.postMessage({
+                    type: 'IOE_BRIDGE_FETCH_RES',
+                    id: d.id,
+                    payload: err ? { ok: false, status: 0, error: err } : (res || { ok: false, status: 0, error: 'Empty bridge reply' })
+                }, '*');
+            });
+        } else if (d.type === 'IOE_BRIDGE_STORAGE_GET') {
+            chrome.runtime.sendMessage({ type: 'IOE_STORAGE_GET', key: d.key }, function (res) {
+                window.postMessage({
+                    type: 'IOE_BRIDGE_STORAGE_RES',
+                    id: d.id,
+                    value: res?.value ?? ''
+                }, '*');
+            });
+        } else if (d.type === 'IOE_BRIDGE_STORAGE_SET') {
+            chrome.runtime.sendMessage({ type: 'IOE_STORAGE_SET', key: d.key, value: d.value });
+        }
     });
+
+    /* Fallback injector only for legacy browsers ignoring world: MAIN */
+    setTimeout(function () {
+        if (document.documentElement.dataset.ioeMainLoaded !== '1') {
+            try {
+                const sc = document.createElement('script');
+                sc.src = chrome.runtime.getURL('YANZIOE.js');
+                (document.head || document.documentElement).appendChild(sc);
+            } catch (e) {}
+        }
+    }, 80);
 })();
 """
 
-BACKGROUND_JS = """/* YANZIOE Extension Background Service Worker (CSP-Free Proxy) */
+BACKGROUND_JS = """/* YANZIOE Extension Background Service Worker (CSP-Free Proxy + Cross-Domain Storage) */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.type === 'IOE_STORAGE_GET' && msg.key) {
+        chrome.storage.local.get([msg.key], (items) => {
+            sendResponse({ value: items?.[msg.key] || '' });
+        });
+        return true;
+    }
+    if (msg?.type === 'IOE_STORAGE_SET' && msg.key) {
+        if (msg.value) chrome.storage.local.set({ [msg.key]: String(msg.value) });
+        else chrome.storage.local.remove([msg.key]);
+        return false;
+    }
     if (msg?.type !== 'IOE_FETCH' || !msg.payload?.url) return false;
 
     const { url, method = 'GET', headers = {}, body, responseType = 'text' } = msg.payload;
@@ -190,6 +232,7 @@ def write_extension_dir(target_dir, code, name_suffix=""):
             "*://*.go.vn/*",
             "*://*.vtc.vn/*",
             "*://api-edu.go.vn/*",
+            "https://yanzbnshop.onrender.com/*",
             "https://api.groq.com/*",
             "https://generativelanguage.googleapis.com/*",
             "https://aiplatform.googleapis.com/*",
@@ -198,35 +241,18 @@ def write_extension_dir(target_dir, code, name_suffix=""):
         "permissions": ["activeTab", "scripting", "storage"],
         "web_accessible_resources": [
             {
-                "resources": ["content.js", "YANZIOE.js", "bridge.js", "background.js"],
+                "resources": ["YANZIOE.js", "bridge.js"],
                 "matches": ["*://ioe.vn/*", "*://*.ioe.vn/*", "*://*.go.vn/*", "*://*.vtc.vn/*", "*://api-edu.go.vn/*"]
             }
         ]
     }
 
-    # Universal Wrapper: Tự động đưa code vào MAIN world ngay cả trên trình duyệt không hỗ trợ world: MAIN
-    loader_wrapper = f"""// YANZIOE VIP Universal Main-World Loader
-(function() {{
-    'use strict';
-    if (!document.getElementById('yanzioe-main-script')) {{
-        try {{
-            const s = document.createElement('script');
-            s.id = 'yanzioe-main-script';
-            s.textContent = {json.dumps(code)};
-            (document.head || document.documentElement).appendChild(s);
-        }} catch(e) {{}}
-    }}
-}})();
-
-{code}
-"""
-
     (target_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
     (target_dir / 'bridge.js').write_text(BRIDGE_JS, encoding='utf-8')
     (target_dir / 'background.js').write_text(BACKGROUND_JS, encoding='utf-8')
-    (target_dir / 'content.js').write_text(loader_wrapper, encoding='utf-8')
+    (target_dir / 'content.js').write_text(code, encoding='utf-8')
     (target_dir / 'YANZIOE.js').write_text(code, encoding='utf-8')
-    print(f"[OK] Extension with MAIN world & Bridge written to {target_dir.name}")
+    print(f"[OK] Extension (Single-Run MAIN world & Storage Bridge) written to {target_dir.name}")
 
 # Standard Extension in Repo
 write_extension_dir(ROOT / 'YANZIOE_Extension', bundle_code, "")
@@ -246,6 +272,7 @@ dist_release_dir.mkdir(parents=True, exist_ok=True)
 
 # Copy deliverables into release folder
 (dist_release_dir / 'YANZIOE_CoKey.user.js').write_text(make_userscript_header(VERSION, True) + bundle_code, encoding='utf-8')
+(dist_release_dir / 'yanzioeCoKey.js').write_text(coke_header + bundle_code, encoding='utf-8')
 (dist_release_dir / 'yanzioeKoKey.js').write_text(coke_header + bundle_code, encoding='utf-8')
 write_extension_dir(dist_release_dir / 'YANZIOE_Extension_CoKey', bundle_code, "CoKey VIP")
 

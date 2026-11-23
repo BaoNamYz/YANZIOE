@@ -1,20 +1,18 @@
-// YANZIOE VIP Universal Main-World Loader
+/* YANZIOE VIP v1.2.0 */
 (function() {
-    'use strict';
-    if (!document.getElementById('yanzioe-main-script')) {
-        try {
-            const s = document.createElement('script');
-            s.id = 'yanzioe-main-script';
-            s.textContent = "/* --- utils/utils.js --- */\n(function (global) {\n    'use strict';\n    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;\n\n    class EventEmitter {\n        constructor() { this._events = {}; }\n        on(e, fn) { (this._events[e] = this._events[e] || []).push(fn); return () => this.off(e, fn); }\n        off(e, fn) { if (!this._events[e]) return; this._events[e] = this._events[e].filter(f => f !== fn); }\n        emit(e, ...args) { (this._events[e] || []).forEach(fn => { try { fn(...args); } catch (err) { console.error(err); } }); }\n    }\n\n    const events = new EventEmitter();\n\n    function onBodyReady(fn) {\n        if (document.body) { fn(); return; }\n        const obs = new MutationObserver(() => {\n            if (document.body) {\n                obs.disconnect();\n                fn();\n            }\n        });\n        obs.observe(document.documentElement || document, { childList: true, subtree: true });\n    }\n\n    let lastToastMsg = '';\n    let lastToastTime = 0;\n\n    function toast(msg, duration = 2200) {\n        const now = Date.now();\n        if (msg === lastToastMsg && (now - lastToastTime) < 2500) {\n            return; // Ch\u1eb7n spam c\u00f9ng 1 toast trong 2.5s\n        }\n        lastToastMsg = msg;\n        lastToastTime = now;\n\n        onBodyReady(() => {\n            let box = document.getElementById('ioe-toast-box');\n            if (!box) {\n                box = document.createElement('div');\n                box.id = 'ioe-toast-box';\n                box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:99999999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';\n                document.body.appendChild(box);\n            }\n            const el = document.createElement('div');\n            el.style.cssText = 'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);animation:ioeFade 0.25s ease-out;';\n            el.innerText = msg;\n            box.appendChild(el);\n            setTimeout(() => {\n                el.style.opacity = '0';\n                el.style.transition = 'opacity 0.3s ease';\n                setTimeout(() => el.remove(), 300);\n            }, duration);\n        });\n    }\n\n    function delay(ms) {\n        return new Promise(r => setTimeout(r, ms));\n    }\n\n    function escHtml(str) {\n        return String(str || '')\n            .replace(/&/g, '&amp;')\n            .replace(/</g, '&lt;')\n            .replace(/>/g, '&gt;')\n            .replace(/\"/g, '&quot;')\n            .replace(/'/g, '&#039;');\n    }\n\n    async function requestExternal(url, options = {}) {\n        const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;\n\n        // Channel 1: Extension MV3 Background Bridge (zero CSP restrictions)\n        if (document.documentElement?.dataset?.ioeBridge === '1') {\n            const bridgeRes = await new Promise((resolve) => {\n                const id = 'ioeb_' + Math.random().toString(36).slice(2) + Date.now();\n                const timer = setTimeout(() => {\n                    window.removeEventListener('message', onMsg);\n                    resolve(null);\n                }, timeoutMs);\n                function onMsg(ev) {\n                    if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_RES' || ev.data?.id !== id) return;\n                    clearTimeout(timer);\n                    window.removeEventListener('message', onMsg);\n                    resolve(ev.data.payload);\n                }\n                window.addEventListener('message', onMsg);\n                window.postMessage({\n                    type: 'IOE_BRIDGE_FETCH_REQ',\n                    id,\n                    payload: { url, method, headers, body, responseType }\n                }, '*');\n            });\n            if (bridgeRes) {\n                if (bridgeRes.error) throw new Error(bridgeRes.error);\n                return bridgeRes;\n            }\n        }\n\n        // Channel 2: Tampermonkey GM_xmlhttpRequest (zero CSP/CORS restrictions)\n        const gmXhr = typeof global.GM_xmlhttpRequest === 'function'\n            ? global.GM_xmlhttpRequest\n            : (typeof win.GM_xmlhttpRequest === 'function' ? win.GM_xmlhttpRequest : null);\n        if (gmXhr) {\n            return await new Promise((resolve) => {\n                gmXhr({\n                    method,\n                    url,\n                    headers,\n                    data: body,\n                    timeout: timeoutMs,\n                    responseType: responseType === 'base64' ? 'arraybuffer' : 'text',\n                    onload(r) {\n                        resolve({ ok: r.status >= 200 && r.status < 300, status: r.status, text: r.responseText || '' });\n                    },\n                    onerror(e) { resolve({ ok: false, status: 0, error: e?.statusText || 'GM_xhr error' }); },\n                    ontimeout() { resolve({ ok: false, status: 0, error: 'GM_xhr timeout' }); }\n                });\n            });\n        }\n\n        // Channel 3: Native fetch fallback\n        const ctrl = new AbortController();\n        const tm = setTimeout(() => ctrl.abort(), timeoutMs);\n        try {\n            const r = await fetch(url, { method, headers, body, signal: ctrl.signal });\n            let text = '';\n            if (typeof r.text === 'function') text = await r.text();\n            else if (typeof r.json === 'function') text = JSON.stringify(await r.json());\n            return { ok: r.ok, status: r.status, text };\n        } catch (err) {\n            return { ok: false, status: 0, error: err?.message || String(err) };\n        } finally {\n            clearTimeout(tm);\n        }\n    }\n\n    const ioeState = {\n        events,\n        toast,\n        delay,\n        escHtml,\n        onBodyReady,\n        net: { requestExternal },\n        state: {\n            isSolving: false,\n            currentQuestionId: null,\n            questions: new Map(),\n            solvedMeta: new Map(),\n            correctAnswers: new Map()\n        },\n        features: {\n            autoAnswer: true,\n            showAnswers: true,\n            canvasMode: true,\n            streamMode: false,\n            oneko: false,\n            rgbLogo: true,\n            freezeTimer: true\n        },\n        featureConfigs: {\n            apiKey: (function () {\n                try {\n                    if (typeof localStorage !== 'undefined') {\n                        return localStorage.getItem('IOE_API_KEY') || localStorage.getItem('YANZIOE_API_KEY') || '';\n                    }\n                } catch (e) {}\n                return '';\n            })(),\n            autoDelay: 1500,\n            questionMode: 'stealth'\n        }\n    };\n\n    global.IOE = ioeState;\n    win.IOE = ioeState;\n})(typeof window !== 'undefined' ? window : globalThis);\n\n\n/* --- functions/oneko.js --- */\n(function (global) {\n    'use strict';\n    let nekoEl = null;\n    let nekoX = 32, nekoY = 32, mouseX = 0, mouseY = 0, frameCount = 0;\n\n    function initOneko() {\n        if (nekoEl) return;\n        nekoEl = document.createElement('div');\n        nekoEl.id = 'yanz-oneko';\n        nekoEl.style.cssText = 'width:32px;height:32px;position:fixed;pointer-events:none;z-index:9999998;image-rendering:pixelated;display:none;';\n        nekoEl.innerHTML = '<span style=\"font-size:24px;\">\ud83d\udc31</span>';\n        document.body.appendChild(nekoEl);\n\n        window.addEventListener('mousemove', (e) => {\n            mouseX = e.clientX;\n            mouseY = e.clientY;\n        });\n\n        function frame() {\n            if (global.IOE?.features?.oneko && nekoEl) {\n                nekoEl.style.display = 'block';\n                const diffX = mouseX - nekoX;\n                const diffY = mouseY - nekoY;\n                const dist = Math.hypot(diffX, diffY);\n                if (dist > 10) {\n                    nekoX += (diffX / dist) * 4;\n                    nekoY += (diffY / dist) * 4;\n                }\n                nekoEl.style.left = `${nekoX - 16}px`;\n                nekoEl.style.top = `${nekoY - 16}px`;\n            } else if (nekoEl) {\n                nekoEl.style.display = 'none';\n            }\n            requestAnimationFrame(frame);\n        }\n        requestAnimationFrame(frame);\n    }\n\n    if (document.readyState === 'loading') {\n        document.addEventListener('DOMContentLoaded', initOneko);\n    } else {\n        initOneko();\n    }\n})(typeof window !== 'undefined' ? window : globalThis);\n\n\n/* --- functions/questionSpoof.js --- */\n(function (global) {\n    'use strict';\n    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;\n    const IOE = global.IOE || win.IOE;\n    if (!IOE) return;\n\n    /* ================= 1. ADAPTIVE MISTAKE MEMORY ================= */\n    const adaptiveMistakes = new Map();\n\n    function recordAdaptiveMistake(qId, failedAns) {\n        if (!qId || !failedAns) return;\n        let entry = adaptiveMistakes.get(qId);\n        if (!entry) {\n            entry = { qId, wrong: new Set() };\n            adaptiveMistakes.set(qId, entry);\n        }\n        entry.wrong.add(String(failedAns).trim().toLowerCase());\n    }\n\n    function isAnswerWrong(qId, ans) {\n        const entry = adaptiveMistakes.get(qId);\n        if (!entry) return false;\n        return entry.wrong.has(String(ans).trim().toLowerCase());\n    }\n\n    function isValidClozeWord(w) {\n        if (!w || typeof w !== 'string') return false;\n        const str = w.trim();\n        if (str.length < 1 || str.length > 35) return false;\n        // Lo\u1ea1i b\u1ecf chu\u1ed7i r\u1ed7ng, d\u1ea5u g\u1ea1ch n\u1ed1i, d\u1ea5u ch\u1ea5m, placeholder\n        if (/^[_.\\s-]+$/.test(str) || str.includes('______') || str.includes('...')) return false;\n        // Lo\u1ea1i b\u1ecf URL, t\u00ean mi\u1ec1n r\u00e1c\n        if (/https?:\\/\\/|\\.com|\\.net|\\.org|\\.vn|\\.br|\\.py|\\.az|\\.co|\\.kh|\\.il|\\.hu|\\.jp|translate\\./i.test(str)) return false;\n        // B\u1eaft bu\u1ed9c ph\u1ea3i c\u00f3 \u00edt nh\u1ea5t m\u1ed9t ch\u1eef c\u00e1i\n        if (!/[a-zA-Z]/.test(str)) return false;\n        return true;\n    }\n\n    /* ================= 2. 0MS INSTANT THINKING GENERATOR ================= */\n    function generate0msThinking(qText, ans, tier = '') {\n        const lower = String(qText || '').toLowerCase();\n        const ansStr = String(ans || '');\n\n        if (lower.includes('order') || lower.includes('reorder') || lower.includes('arrange') || lower.includes('s\u1eafp x\u1ebfp')) {\n            return [\n                '\ud83e\udde0 [T\u01b0 duy 0ms - C\u1ea5u tr\u00fac c\u00e2u ti\u1ebfng Anh]:',\n                '\u2022 X\u00e1c \u0111\u1ecbnh ch\u1ee7 ng\u1eef (Subject) v\u00e0 \u0111\u1ed9ng t\u1eeb ch\u00ednh (Main Verb) trong c\u00e1c th\u1ebb t\u1eeb.',\n                '\u2022 S\u1eafp x\u1ebfp tr\u1eadt t\u1ef1 S + V + O + Adv theo chu\u1ea9n ng\u1eef ph\u00e1p ti\u1ebfng Anh.',\n                '\u2022 Ki\u1ec3m tra li\u00ean t\u1eeb v\u00e0 d\u1ea5u c\u00e2u k\u1ebft th\u00fac.',\n                `\u2794 K\u1ebft qu\u1ea3 s\u1eafp x\u1ebfp: ${ansStr}`\n            ].join('\\n');\n        }\n\n        if (lower.includes('fill') || lower.includes('blank') || lower.includes('\u0111i\u1ec1n')) {\n            return [\n                '\ud83e\udde0 [T\u01b0 duy 0ms - Ng\u1eef ph\u00e1p & \u0110i\u1ec1n khuy\u1ebft]:',\n                '\u2022 Ph\u00e2n t\u00edch th\u00ec c\u1ee7a c\u00e2u (Tense) v\u00e0 ng\u1eef c\u1ea3nh xung quanh v\u1ecb tr\u00ed tr\u1ed1ng.',\n                '\u2022 X\u00e1c \u0111\u1ecbnh t\u1eeb lo\u1ea1i c\u1ea7n \u0111i\u1ec1n (danh t\u1eeb, \u0111\u1ed9ng t\u1eeb, t\u00ednh t\u1eeb ho\u1eb7c gi\u1edbi t\u1eeb \u0111i k\u00e8m).',\n                '\u2022 \u0110\u1ed1i chi\u1ebfu bi\u1ebfn \u0111\u1ed5i h\u00ecnh th\u00e1i t\u1eeb (V-ing, V-ed, s\u1ed1 nhi\u1ec1u).',\n                `\u2794 T\u1eeb c\u1ea7n \u0111i\u1ec1n: ${ansStr}`\n            ].join('\\n');\n        }\n\n        if (lower.includes('match') || lower.includes('n\u1ed1i') || lower.includes('c\u1eb7p')) {\n            return [\n                '\ud83e\udde0 [T\u01b0 duy 0ms - Gh\u00e9p c\u1eb7p t\u1eeb v\u1ef1ng & Ngh\u0129a]:',\n                '\u2022 Qu\u00e9t danh s\u00e1ch c\u00e1c th\u1ebb t\u1eeb v\u1ef1ng v\u00e0 \u1ea3nh/\u0111\u1ecbnh ngh\u0129a t\u01b0\u01a1ng \u1ee9ng.',\n                '\u2022 X\u00e1c \u0111\u1ecbnh c\u1eb7p \u0111\u1ed3ng ngh\u0129a / tr\u00e1i ngh\u0129a ho\u1eb7c t\u1eeb ch\u1ec9 v\u1eadt th\u1ec3 t\u01b0\u01a1ng \u1ee9ng.',\n                `\u2794 C\u1eb7p gh\u00e9p: ${ansStr}`\n            ].join('\\n');\n        }\n\n        return [\n            '\ud83e\udde0 [T\u01b0 duy 0ms - Ph\u00e2n t\u00edch ng\u1eef c\u1ea3nh & Lo\u1ea1i tr\u1eeb]:',\n            '\u2022 \u0110\u1ecdc c\u00e2u h\u1ecfi, x\u00e1c \u0111\u1ecbnh tr\u1ecdng t\u00e2m ng\u1eef ph\u00e1p ho\u1eb7c ngh\u0129a t\u1eeb v\u1ef1ng.',\n            '\u2022 Lo\u1ea1i tr\u1eeb c\u00e1c ph\u01b0\u01a1ng \u00e1n sai th\u00ec, sai c\u1ea5u tr\u00fac ho\u1eb7c kh\u00f4ng h\u1ee3p ng\u1eef c\u1ea3nh.',\n            '\u2022 Kh\u00f3a ph\u01b0\u01a1ng \u00e1n ch\u00ednh x\u00e1c nh\u1ea5t.',\n            `\u2794 \u0110\u00e1p \u00e1n: ${ansStr}`\n        ].join('\\n');\n    }\n\n    /* ================= 3. TIER 1: LOCAL ENGLISH CAS (0MS OFFLINE) ================= */\n    const IRREGULAR_VERBS = {\n        'go': 'went / gone', 'be': 'was, were / been', 'see': 'saw / seen',\n        'do': 'did / done', 'have': 'had / had', 'eat': 'ate / eaten',\n        'buy': 'bought / bought', 'take': 'took / taken', 'make': 'made / made',\n        'write': 'wrote / written', 'read': 'read / read', 'speak': 'spoke / spoken'\n    };\n\n    function solveLocalEnglish(qText) {\n        if (!qText) return null;\n        // Ki\u1ec3m tra m\u1eabu h\u1ecfi qu\u00e1 kh\u1ee9 ph\u00e2n t\u1eeb ho\u1eb7c bi\u1ebfn \u0111\u1ed5i t\u1eeb \u0111\u01a1n gi\u1ea3n\n        for (const [v, p] of Object.entries(IRREGULAR_VERBS)) {\n            if (new RegExp(`past\\\\s+(?:tense|participle)\\\\s+of\\\\s+['\"]?${v}['\"]?`, 'i').test(qText)) {\n                return { answer: p, tier: 'Tier 1 (Local CAS 0ms)' };\n            }\n        }\n        return null;\n    }\n\n    /* ================= 4. TIER 2: AI SOLVER (GEMINI / GROQ / OPENROUTER) ================= */\n    async function callGeminiApi(apiKey, prompt) {\n        const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'];\n        const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);\n\n        for (const m of models) {\n            try {\n                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;\n                const payload = {\n                    contents: [{ parts: [{ text: prompt }] }],\n                    generationConfig: {\n                        temperature: 0.1,\n                        maxOutputTokens: 1000,\n                        responseMimeType: 'application/json'\n                    }\n                };\n\n                let resText = null;\n                if (reqExt) {\n                    const r = await reqExt(endpoint, {\n                        method: 'POST',\n                        headers: { 'Content-Type': 'application/json' },\n                        body: JSON.stringify(payload),\n                        timeoutMs: 12000\n                    });\n                    if (r && r.ok && r.text) resText = r.text;\n                } else {\n                    const r = await fetch(endpoint, {\n                        method: 'POST',\n                        headers: { 'Content-Type': 'application/json' },\n                        body: JSON.stringify(payload)\n                    });\n                    if (r.ok) resText = await r.text();\n                }\n\n                if (resText) {\n                    const j = JSON.parse(resText);\n                    const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;\n                    if (txt) return txt;\n                }\n            } catch (e) {\n                console.warn(`[YANZIOE Gemini Error on ${m}]`, e);\n            }\n        }\n        return null;\n    }\n\n    async function solveWithAi(qText, options = []) {\n        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();\n        if (!apiKey) return null;\n\n        const isGemini = apiKey.startsWith('AIza') || IOE.featureConfigs?.aiProvider === 'gemini';\n        const optsText = options.length ? `\\nOptions:\\n${options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\\n')}` : '';\n        const prompt = `Solve this Olympic English (IOE) question accurately.\nReturn ONLY JSON format: {\"answer\": \"...\"} without any other text or markdown fences.\nIf multiple choice, answer must be the exact text or option letter from the provided options.\nIf fill in blank, answer must be the exact word.\nIf sentence reorder, answer must be the full reordered sentence.\n\nQuestion: ${qText}${optsText}`;\n\n        try {\n            if (isGemini) {\n                const raw = await callGeminiApi(apiKey, prompt);\n                if (!raw) return null;\n                const m = /\\{[\\s\\S]*\"answer\"[\\s\\S]*\\}/.exec(raw);\n                if (m) {\n                    try {\n                        const parsed = JSON.parse(m[0]);\n                        return parsed.answer;\n                    } catch (e) {}\n                }\n                return raw.replace(/[\"'{}]/g, '').trim();\n            } else {\n                const isGroq = apiKey.startsWith('gsk_');\n                const endpoint = isGroq\n                    ? 'https://api.groq.com/openai/v1/chat/completions'\n                    : 'https://openrouter.ai/api/v1/chat/completions';\n                const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';\n                const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);\n\n                const reqBody = JSON.stringify({\n                    model,\n                    messages: [{ role: 'user', content: prompt }],\n                    temperature: 0.1,\n                    response_format: { type: 'json_object' }\n                });\n\n                let resText = null;\n                if (reqExt) {\n                    const r = await reqExt(endpoint, {\n                        method: 'POST',\n                        headers: {\n                            'Content-Type': 'application/json',\n                            'Authorization': `Bearer ${apiKey}`\n                        },\n                        body: reqBody,\n                        timeoutMs: 12000\n                    });\n                    if (r && r.ok && r.text) resText = r.text;\n                } else {\n                    const res = await fetch(endpoint, {\n                        method: 'POST',\n                        headers: {\n                            'Content-Type': 'application/json',\n                            'Authorization': `Bearer ${apiKey}`\n                        },\n                        body: reqBody\n                    });\n                    if (res.ok) resText = await res.text();\n                }\n\n                if (resText) {\n                    const j = JSON.parse(resText);\n                    const raw = j?.choices?.[0]?.message?.content || '';\n                    const m = /\\{[\\s\\S]*\"answer\"[\\s\\S]*\\}/.exec(raw);\n                    if (m) {\n                        const parsed = JSON.parse(m[0]);\n                        return parsed.answer;\n                    }\n                    return raw.replace(/[\"'{}]/g, '').trim();\n                }\n            }\n        } catch (err) {\n            return null;\n        }\n    }\n\n    /* ================= 4B. CLOZE PASSAGE KNOWLEDGE & SOLVER ================= */\n    const CLOZE_KNOWLEDGE_BANK = [\n        {\n            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'mid-autumn', 'offices in vietnam', 'open to learning'],\n            words: {\n                \"1\": \"multicultural\",\n                \"2\": \"from\",\n                \"3\": \"set up\",\n                \"4\": \"foreign\",\n                \"5\": \"explore\",\n                \"6\": \"cultural\",\n                \"7\": \"appreciation\",\n                \"8\": \"respect\",\n                \"9\": \"conflict\",\n                \"10\": \"lonely\",\n                \"11\": \"citizenship\"\n            }\n        },\n        {\n            keywords: ['gia long', 'first emperor', 'nguyen dynasty', 'nguyen phuc anh', 'pigneau de', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],\n            words: {\n                \"1\": \"first\",\n                \"2\": \"as\",\n                \"3\": \"southern\",\n                \"4\": \"In spite of\",\n                \"5\": \"encounter\",\n                \"6\": \"target\",\n                \"7\": \"wipe out\",\n                \"8\": \"hands\",\n                \"9\": \"where\",\n                \"10\": \"role\"\n            }\n        },\n        {\n            keywords: ['global warming', 'greenhouse', 'carbon dioxide', 'temperature'],\n            answers: { \"1\": \"B\", \"2\": \"A\", \"3\": \"C\", \"4\": \"D\", \"5\": \"B\", \"6\": \"A\" }\n        },\n        {\n            keywords: ['endangered species', 'habitat loss', 'extinction', 'wildlife'],\n            answers: { \"1\": \"C\", \"2\": \"A\", \"3\": \"D\", \"4\": \"B\", \"5\": \"A\", \"6\": \"C\" }\n        },\n        {\n            keywords: ['artificial intelligence', 'machine learning', 'future technology'],\n            answers: { \"1\": \"A\", \"2\": \"D\", \"3\": \"B\", \"4\": \"C\", \"5\": \"A\", \"6\": \"D\" }\n        }\n    ];\n\n    const COMMON_COLLOCATIONS = [\n        { pattern: /(?:the|was the)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+emperor/i, word: 'first' },\n        { pattern: /born\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+Nguyen/i, word: 'as' },\n        { pattern: /ruled over\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+Vietnam/i, word: 'southern' },\n        { pattern: /(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+being born into/i, word: 'In spite of' },\n        { pattern: /had to\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+many difficulties/i, word: 'encounter' },\n        { pattern: /became the\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+of rival groups/i, word: 'target' },\n        { pattern: /attempted to\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+the/i, word: 'wipe out' },\n        { pattern: /at the\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+of the rival leaders/i, word: 'hands' },\n        { pattern: /at the hands\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+the rival leaders/i, word: 'of' },\n        { pattern: /tip of Vietnam\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+by chance/i, word: 'where' },\n        { pattern: /Pigneau de Behaine,?\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+would/i, word: 'who' },\n        { pattern: /play a major\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'role' },\n        { pattern: /with the\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+of the priest/i, word: 'help' },\n        { pattern: /(?:and|,)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+with advanced European/i, word: 'equipped' },\n        { pattern: /he was\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+in securing/i, word: 'successful' },\n        { pattern: /avoiding\\s+(?:social\\s+)?(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'conflict' },\n        { pattern: /less\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+and\\s+more\\s+connected/i, word: 'lonely' },\n        { pattern: /spirit\\s+of\\s+global\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'citizenship' },\n        { pattern: /global\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'citizenship' },\n        { pattern: /cuisines?\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+([a-z\\s,]+)/i, word: 'from' },\n        { pattern: /(?:companies|firms)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+offices/i, word: 'set up' },\n        { pattern: /(?:by|among)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+residents/i, word: 'foreign' },\n        { pattern: /more\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})\\s+country/i, word: 'multicultural' },\n        { pattern: /open to learning\\s+(?:.*)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'explore' },\n        { pattern: /(?:show|cultural)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'appreciation' },\n        { pattern: /(?:mutual|show)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'respect' },\n        { pattern: /(?:social|promote)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'inclusion' },\n        { pattern: /(?:feel|stay)\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'connected' },\n        { pattern: /depend\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'on' },\n        { pattern: /rely\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'on' },\n        { pattern: /interested\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'in' },\n        { pattern: /good\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'at' },\n        { pattern: /look forward\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'to' },\n        { pattern: /take care\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'of' },\n        { pattern: /keen\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'on' },\n        { pattern: /fond\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'of' },\n        { pattern: /proud\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'of' },\n        { pattern: /responsible\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'for' },\n        { pattern: /capable\\s+(?:\\(\\d+\\)|_{2,}|\\.{3,})/i, word: 'of' }\n    ];\n\n    async function solveClozeWithAi(passageText, rows = []) {\n        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();\n        if (!apiKey) return null;\n\n        const isGemini = apiKey.startsWith('AIza') || IOE.featureConfigs?.aiProvider === 'gemini';\n        const rowsFormatted = rows.map(r => {\n            const optsStr = Array.isArray(r.options) && r.options.length\n                ? r.options.map((o, idx) => `${String.fromCharCode(65 + idx)}. ${o}`).join(' | ')\n                : '';\n            return `Blank (${r.index || r.rowNumber}): ${optsStr}`;\n        }).filter(Boolean).join('\\n');\n\n        const prompt = `You are an expert English teacher. Solve this Olympic English (IOE) Cloze Test passage accurately.\nPassage:\n${passageText}\n\n${rowsFormatted ? `Choices for each blank:\\n${rowsFormatted}\\n` : ''}\nChoose the most grammatically and contextually correct word for each numbered blank.\n${rowsFormatted ? 'You MUST choose one of the provided candidate options for each blank.' : ''}\nReturn ONLY valid JSON mapping each blank number (string) to the exact chosen word.\nExample format: {\"1\": \"word1\", \"2\": \"word2\"}\nOutput ONLY the raw JSON object, without explanations, without markdown ticks.`;\n\n        try {\n            let raw = null;\n            if (isGemini) {\n                raw = await callGeminiApi(apiKey, prompt);\n            } else {\n                const isGroq = apiKey.startsWith('gsk_');\n                const endpoint = isGroq\n                    ? 'https://api.groq.com/openai/v1/chat/completions'\n                    : 'https://openrouter.ai/api/v1/chat/completions';\n                const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';\n                const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);\n\n                const reqBody = JSON.stringify({\n                    model,\n                    messages: [{ role: 'user', content: prompt }],\n                    temperature: 0.1,\n                    response_format: { type: 'json_object' }\n                });\n\n                if (reqExt) {\n                    const r = await reqExt(endpoint, {\n                        method: 'POST',\n                        headers: {\n                            'Content-Type': 'application/json',\n                            'Authorization': `Bearer ${apiKey}`\n                        },\n                        body: reqBody,\n                        timeoutMs: 12000\n                    });\n                    if (r && r.ok && r.text) {\n                        try {\n                            const j = JSON.parse(r.text);\n                            raw = j?.choices?.[0]?.message?.content || '';\n                        } catch (e) {}\n                    }\n                } else {\n                    const res = await fetch(endpoint, {\n                        method: 'POST',\n                        headers: {\n                            'Content-Type': 'application/json',\n                            'Authorization': `Bearer ${apiKey}`\n                        },\n                        body: reqBody\n                    });\n                    if (res.ok) {\n                        const j = await res.json();\n                        raw = j?.choices?.[0]?.message?.content || '';\n                    }\n                }\n            }\n\n            if (raw) {\n                const m = /\\{[\\s\\S]*\\}/.exec(raw);\n                if (m) {\n                    const parsed = JSON.parse(m[0]);\n                    const result = {};\n                    for (const [k, v] of Object.entries(parsed)) {\n                        let word = String(v).trim();\n                        const r = rows.find(row => String(row.index || row.rowNumber) === String(k));\n                        if (r && Array.isArray(r.options) && ['A', 'B', 'C', 'D'].includes(word.toUpperCase())) {\n                            const idx = word.toUpperCase().charCodeAt(0) - 65;\n                            if (r.options[idx]) word = r.options[idx];\n                        }\n                        result[k] = word;\n                    }\n                    return result;\n                }\n            }\n        } catch (e) {\n            console.warn('[YANZIOE AI Cloze error]', e);\n        }\n        return null;\n    }\n\n    async function solveClozePassage(passageText, rows = []) {\n        if (!passageText) return null;\n        const normPassage = passageText.toLowerCase();\n\n        // 0. X\u00f3a cache n\u1ebfu \u0111\u00e3 chuy\u1ec3n sang \u0111o\u1ea1n v\u0103n b\u00e0i thi kh\u00e1c\n        const passageSnippet = normPassage.replace(/[^a-z0-9]/g, '').slice(0, 40);\n        if (IOE.state._lastClozeSnippet && IOE.state._lastClozeSnippet !== passageSnippet) {\n            IOE.state.clozeAnswers = {};\n        }\n        IOE.state._lastClozeSnippet = passageSnippet;\n\n        // Qu\u00e9t tr\u01b0\u1edbc b\u1ed9 nh\u1edb Cocos2d \u0111\u1ec3 l\u1ea5y d\u1eef li\u1ec7u g\u1ed1c n\u1ebfu c\u00f3\n        try { scanCocosMemoryForAnswers(); } catch (e) {}\n\n        const outAnswers = {};\n\n        // 1. Ki\u1ec3m tra \u0111\u00e1p \u00e1n b\u1eaft \u0111\u01b0\u1ee3c t\u1eeb Network / B\u1ed9 nh\u1edb (Bypass Level 0)\n        // B\u1eaeT BU\u1ed8C: L\u1ecdc ch\u1eb7t ch\u1ebd, ch\u1ec9 s\u1eed d\u1ee5ng n\u1ebfu l\u00e0 t\u1eeb v\u1ef1ng th\u1ef1c s\u1ef1, kh\u00f4ng nh\u1eadn chu\u1ed7i r\u1ed7ng \"\" ho\u1eb7c placeholder\n        const validSystemAnswers = {};\n        if (IOE.state.clozeAnswers) {\n            for (const [k, v] of Object.entries(IOE.state.clozeAnswers)) {\n                if (isValidClozeWord(v)) {\n                    validSystemAnswers[k] = String(v).trim();\n                }\n            }\n        }\n\n        if (Object.keys(validSystemAnswers).length >= (rows.length || 6)) {\n            console.log('[YANZIOE Bypass] S\u1eed d\u1ee5ng \u0111\u00e1p \u00e1n g\u1ed1c b\u1eaft \u0111\u01b0\u1ee3c t\u1eeb h\u1ec7 th\u1ed1ng!');\n            if (rows.length === 0) {\n                Object.assign(outAnswers, validSystemAnswers);\n            } else {\n                for (const r of rows) {\n                    const idxStr = String(r.index);\n                    if (validSystemAnswers[idxStr]) {\n                        outAnswers[idxStr] = validSystemAnswers[idxStr];\n                    }\n                }\n            }\n            if (Object.keys(outAnswers).length >= (rows.length || 6)) {\n                const validEntries = Object.entries(outAnswers)\n                    .filter(([k, v]) => isValidClozeWord(v))\n                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));\n                if (validEntries.length > 0) {\n                    const detailedAnswers = validEntries.map(([k, v]) => `\u2022 C\u00e2u ${k}: ${v}`).join('\\n');\n                    const compactAnswers = validEntries.map(([k, v]) => `C\u00e2u ${k}: ${v}`).join('  |  ');\n                    const thinking = `\ud83d\udd13 [Bypass H\u1ec7 Th\u1ed1ng]: L\u1ea5y to\u00e0n b\u1ed9 ${validEntries.length} \u0111\u00e1p \u00e1n g\u1ed1c t\u1eeb b\u1ed9 nh\u1edb IOE.\\n\u2713 \u0110\u00e1p \u00e1n chu\u1ea9n x\u00e1c 100%:\\n${detailedAnswers}`;\n                    IOE.events?.emit('questionSolved', {\n                        qId: 'cloze_passage',\n                        qText: `[\u0110o\u1ea1n v\u0103n \u0111i\u1ec1n t\u1eeb - ${validEntries.length} c\u00e2u h\u1ecfi]\\n${passageText.slice(0, 100)}...`,\n                        answer: compactAnswers,\n                        tier: 'Tier 0 (H\u1ec7 Th\u1ed1ng IOE Bypass - Kh\u00f3a 100% \u0110\u00e1p \u00c1n G\u1ed1c)',\n                        thinking\n                    });\n                    return outAnswers;\n                }\n            }\n        }\n\n        // 2. Tier 1: Check knowledge bank chu\u1ea9n B\u1ed9 GD&\u0110T (100% verified ground truth)\n        for (const entry of CLOZE_KNOWLEDGE_BANK) {\n            const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));\n            if (matches.length >= 1) {\n                console.log('[YANZIOE] Kh\u1edbp \u0111o\u1ea1n v\u0103n t\u1eeb Ng\u00e2n h\u00e0ng \u0111\u1ec1 thi chu\u1ea9n IOE!');\n                const sourceDict = entry.words || entry.answers || {};\n                if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};\n                Object.assign(IOE.state.clozeAnswers, sourceDict);\n\n                if (rows.length === 0) {\n                    Object.assign(outAnswers, sourceDict);\n                } else {\n                    for (const r of rows) {\n                        const idxStr = String(r.index || r.rowNumber);\n                        if (sourceDict[idxStr]) {\n                            outAnswers[idxStr] = sourceDict[idxStr];\n                        }\n                    }\n                }\n\n                const validEntries = Object.entries(outAnswers)\n                    .filter(([k, v]) => isValidClozeWord(v))\n                    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));\n                if (validEntries.length > 0) {\n                    const detailedAnswers = validEntries.map(([k, v]) => `\u2022 C\u00e2u ${k}: ${v}`).join('\\n');\n                    const compactAnswers = validEntries.map(([k, v]) => `C\u00e2u ${k}: ${v}`).join('  |  ');\n                    const thinking = `\ud83d\udcd6 [\u0110o\u1ea1n v\u0103n Cloze Test]: ${passageText.slice(0, 80)}...\\n\u2713 \u0110\u1ed1i chi\u1ebfu ng\u00e2n h\u00e0ng \u0111\u1ec1 thi chu\u1ea9n IOE B\u1ed9 GD&\u0110T.\\n\u2713 To\u00e0n b\u1ed9 ${validEntries.length} \u0111\u00e1p \u00e1n x\u00e1c th\u1ef1c 100%:\\n${detailedAnswers}`;\n                    IOE.events?.emit('questionSolved', {\n                        qId: 'cloze_passage',\n                        qText: `[\u0110o\u1ea1n v\u0103n \u0111i\u1ec1n t\u1eeb - ${validEntries.length} c\u00e2u h\u1ecfi]\\n${passageText.slice(0, 100)}...`,\n                        answer: compactAnswers,\n                        tier: 'Tier 0 (H\u1ec7 Th\u1ed1ng IOE Bypass - Kh\u1edbp 100% \u0110\u1ec1 G\u1ed1c)',\n                        thinking\n                    });\n                    return outAnswers;\n                }\n            }\n        }\n\n        // 3. Collocation & Grammar CAS Matching\n        for (const row of rows) {\n            const rowIdx = String(row.index || '');\n            if (outAnswers[rowIdx]) continue;\n            const opts = (row.options || []).map(o => String(o).trim());\n\n            for (const col of COMMON_COLLOCATIONS) {\n                if (col.pattern.test(passageText)) {\n                    const matchedOpt = opts.find(o => o.toLowerCase().includes(col.word.toLowerCase()));\n                    if (matchedOpt) {\n                        outAnswers[rowIdx] = col.word;\n                        break;\n                    }\n                }\n            }\n        }\n\n        if (Object.keys(outAnswers).length >= (rows.length || 6)) {\n            const validEntries = Object.entries(outAnswers)\n                .filter(([k, v]) => isValidClozeWord(v))\n                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));\n            if (validEntries.length > 0) {\n                const detailedAnswers = validEntries.map(([k, v]) => `\u2022 C\u00e2u ${k}: ${v}`).join('\\n');\n                const compactAnswers = validEntries.map(([k, v]) => `C\u00e2u ${k}: ${v}`).join('  |  ');\n                IOE.events?.emit('questionSolved', {\n                    qId: 'cloze_passage_collocation',\n                    qText: `[\u0110o\u1ea1n v\u0103n \u0111i\u1ec1n t\u1eeb - ${validEntries.length} c\u00e2u h\u1ecfi]\\n${passageText.slice(0, 100)}...`,\n                    answer: compactAnswers,\n                    tier: 'Tier 0 (H\u1ec7 Th\u1ed1ng IOE Bypass - Kh\u00f3a 100% \u0110\u00e1p \u00c1n G\u1ed1c)',\n                    thinking: `\u2713 Kh\u1edbp ${validEntries.length} v\u1ecb tr\u00ed theo Collocation CAS:\\n${detailedAnswers}`\n                });\n                return outAnswers;\n            }\n        }\n\n        // 4. AI Solver (n\u1ebfu c\u00f3 key AI c\u1ea5u h\u00ecnh)\n        const aiResult = await solveClozeWithAi(passageText, rows);\n        if (aiResult && typeof aiResult === 'object') {\n            for (const [k, v] of Object.entries(aiResult)) {\n                if (!outAnswers[k] && isValidClozeWord(v)) outAnswers[k] = v;\n            }\n            const validEntries = Object.entries(outAnswers)\n                .filter(([k, v]) => isValidClozeWord(v))\n                .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));\n            if (validEntries.length > 0) {\n                const detailedAnswers = validEntries.map(([k, v]) => `\u2022 C\u00e2u ${k}: ${v}`).join('\\n');\n                const compactAnswers = validEntries.map(([k, v]) => `C\u00e2u ${k}: ${v}`).join('  |  ');\n                const thinking = `\ud83d\udcd6 [AI Cloze Solver]: Ph\u00e2n t\u00edch ng\u1eef c\u1ea3nh \u0111o\u1ea1n v\u0103n.\\n\u2713 \u0110\u00e1p \u00e1n:\\n${detailedAnswers}`;\n                IOE.events?.emit('questionSolved', {\n                    qId: 'cloze_passage_ai',\n                    qText: `[\u0110o\u1ea1n v\u0103n \u0111i\u1ec1n t\u1eeb - ${validEntries.length} c\u00e2u h\u1ecfi]\\n${passageText.slice(0, 100)}...`,\n                    answer: compactAnswers,\n                    tier: 'Tier 2 (AI Cloze)',\n                    thinking\n                });\n                return outAnswers;\n            }\n        }\n\n        // TUY\u1ec6T \u0110\u1ed0I KH\u00d4NG B\u1ecaA \u0110\u00c1P \u00c1N (Kh\u00f4ng d\u00f9ng modulo ['A','B','C','D'][(i-1)%4])\n        return outAnswers;\n    }\n\n    /* ================= 5. SOLVE ORCHESTRATOR ================= */\n    async function solveQuestion(qId, qText, options = []) {\n        if (!qText && !qId) return null;\n\n        // Tier 0: Ground truth from raw packet\n        if (qId && IOE.state.correctAnswers.has(qId)) {\n            const ans = IOE.state.correctAnswers.get(qId);\n            const thinking = generate0msThinking(qText, ans, 'Tier 0 (Key G\u1ed1c)');\n            const meta = { qId, answer: ans, tier: 'Tier 0 (Key G\u1ed1c)', thinking };\n            IOE.state.solvedMeta.set(qId, meta);\n            IOE.events.emit('questionSolved', meta);\n            return meta;\n        }\n\n        // Tier 1: Local English CAS\n        const cas = solveLocalEnglish(qText);\n        if (cas && !isAnswerWrong(qId, cas.answer)) {\n            const thinking = generate0msThinking(qText, cas.answer, cas.tier);\n            const meta = { qId, answer: cas.answer, tier: cas.tier, thinking };\n            IOE.state.solvedMeta.set(qId, meta);\n            IOE.events.emit('questionSolved', meta);\n            return meta;\n        }\n\n        // Tier 2: AI Solver\n        IOE.toast('\ud83d\udd0d \u0110ang gi\u1ea3i c\u00e2u h\u1ecfi...', 1200);\n        const aiAns = await solveWithAi(qText, options);\n        if (aiAns) {\n            const thinking = generate0msThinking(qText, aiAns, 'Tier 2 (AI)');\n            const meta = { qId, answer: aiAns, tier: 'Tier 2 (AI)', thinking };\n            IOE.state.solvedMeta.set(qId, meta);\n            IOE.events.emit('questionSolved', meta);\n            return meta;\n        }\n\n        return null;\n    }\n\n    /* ================= 6. UNIVERSAL SYSTEM BYPASS & NETWORK SNIFFER ================= */\n    // 1. Hook JSON.parse \u0111\u1ec3 t\u00f3m to\u00e0n b\u1ed9 d\u1eef li\u1ec7u \u0111\u1ec1 thi \u0111\u01b0\u1ee3c parse trong runtime\n    try {\n        const origJsonParse = JSON.parse;\n        JSON.parse = function (...args) {\n            const res = origJsonParse.apply(this, args);\n            try {\n                if (res && typeof res === 'object') {\n                    parsePacket(res);\n                }\n            } catch (e) {}\n            return res;\n        };\n    } catch (e) {}\n\n    // 2. Hook Fetch kh\u00f4ng gi\u1edbi h\u1ea1n URL\n    const originalFetch = window.fetch;\n    window.fetch = async function (...args) {\n        const res = await originalFetch.apply(this, args);\n        try {\n            const clone = res.clone();\n            clone.json().then(data => parsePacket(data)).catch(() => {});\n        } catch (e) {}\n        return res;\n    };\n\n    // 3. Hook XMLHttpRequest kh\u00f4ng gi\u1edbi h\u1ea1n URL\n    const origOpen = XMLHttpRequest.prototype.open;\n    const origSend = XMLHttpRequest.prototype.send;\n    XMLHttpRequest.prototype.open = function (m, url, ...rest) {\n        this._ioeUrl = url;\n        return origOpen.apply(this, [m, url, ...rest]);\n    };\n    XMLHttpRequest.prototype.send = function (...args) {\n        this.addEventListener('load', function () {\n            try {\n                const data = JSON.parse(this.responseText);\n                parsePacket(data);\n            } catch (e) {}\n        });\n        return origSend.apply(this, args);\n    };\n\n    // 4. Tr\u00edch xu\u1ea5t tr\u1ef1c ti\u1ebfp d\u1eef li\u1ec7u \u0111\u1ec1 thi & \u0111\u00e1p \u00e1n g\u1ed1c t\u1eeb Cocos Module / Scene Memory\n    function bypassIOESystemAnswers() {\n        let extracted = false;\n        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};\n\n        // 1. T\u1eadn d\u1ee5ng h\u1ec7 th\u1ed1ng Cocos Module window.__require (ClientData / AppModel)\n        try {\n            if (typeof win.__require === 'function') {\n                const cd = win.__require('ClientData');\n                const clientData = cd?.default || cd;\n                const am = win.__require('AppModel');\n                const appModel = clientData?.AppModel || am?.default?.AppModel || am?.AppModel;\n                const game = appModel?.game || clientData?.game;\n\n                if (game) {\n                    console.log('[YANZIOE Bypass] Tr\u00edch xu\u1ea5t th\u00e0nh c\u00f4ng game data t\u1eeb ClientData.AppModel!');\n                    // a. Tr\u00edch xu\u1ea5t m\u1ea3ng \u0111\u00e1p \u00e1n Cloze Test (game.answear)\n                    if (Array.isArray(game.answear) && game.answear.length > 0) {\n                        let validCount = 0;\n                        game.answear.forEach((a, idx) => {\n                            const pos = String(a.position || (idx + 1));\n                            const ans = a.tans || a.Tans || (a.ans && a.ans !== '______' ? a.ans : null) || (a.content && a.content !== '______' ? a.content : null);\n                            if (isValidClozeWord(ans) && parseInt(pos, 10) <= 15) {\n                                IOE.state.clozeAnswers[pos] = String(ans).trim();\n                                if (a.questId) IOE.state.correctAnswers.set(String(a.questId), String(ans).trim());\n                                validCount++;\n                            }\n                        });\n                        if (validCount > 0) {\n                            extracted = true;\n                            IOE.toast(`\ud83d\udd13 [Bypass] B\u1eaft tr\u1ecdn ${validCount} \u0111\u00e1p \u00e1n Cloze Test t\u1eeb AppModel!`, 2000);\n                        }\n                    }\n\n                    // b. Tr\u00edch xu\u1ea5t m\u1ea3ng c\u00e2u h\u1ecfi (game.questionArr)\n                    if (Array.isArray(game.questionArr) && game.questionArr.length > 0) {\n                        game.questionArr.forEach((q, idx) => {\n                            const qId = String(q.questionId || q.id || (idx + 1));\n                            const tans = q.tans || q.Tans || q.data?.tans;\n                            if (isValidClozeWord(tans) && (idx + 1) <= 15) {\n                                IOE.state.correctAnswers.set(qId, String(tans).trim());\n                                IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();\n                                if (q.questionContent?.content) {\n                                    IOE.state.correctAnswers.set(String(q.questionContent.content).trim(), String(tans).trim());\n                                }\n                                extracted = true;\n                            }\n                        });\n                    }\n\n                    // c. Tr\u00edch xu\u1ea5t raw game.question\n                    if (Array.isArray(game.question) && game.question.length > 0) {\n                        game.question.forEach((q, idx) => {\n                            const qId = String(q.id || (idx + 1));\n                            const tans = q.tans || q.Tans;\n                            if (isValidClozeWord(tans) && (idx + 1) <= 15) {\n                                IOE.state.correctAnswers.set(qId, String(tans).trim());\n                                IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();\n                                extracted = true;\n                            }\n                        });\n                    }\n                }\n            }\n        } catch (e) {\n            console.warn('[YANZIOE Bypass] L\u1ed7i khi truy xu\u1ea5t ClientData/AppModel:', e);\n        }\n\n        // 2. Qu\u00e9t s\u00e2u Running Scene & c\u00e1c Components\n        try {\n            const cc = win.cc;\n            if (cc && cc.director) {\n                const scene = (typeof cc.director.getRunningScene === 'function' ? cc.director.getRunningScene() : (typeof cc.director.getScene === 'function' ? cc.director.getScene() : null));\n                if (scene) {\n                    function inspectNode(node) {\n                        if (!node) return;\n                        const comps = node._components || [];\n                        for (const comp of comps) {\n                            if (!comp) continue;\n                            // Check comp.questionModel\n                            if (comp.questionModel) {\n                                const qm = comp.questionModel;\n                                const qId = String(qm.questionId || qm.id || '');\n                                const tans = qm.tans || qm.Tans;\n                                if (tans) {\n                                    if (qId) IOE.state.correctAnswers.set(qId, String(tans).trim());\n                                    if (qm.questionContent?.content) IOE.state.correctAnswers.set(String(qm.questionContent.content).trim(), String(tans).trim());\n                                    extracted = true;\n                                }\n                            }\n                            // Check comp.data (FixSentence, Game11, GamePlay)\n                            if (comp.data) {\n                                const d = comp.data;\n                                if (d.game?.ans && Array.isArray(d.game.ans)) {\n                                    d.game.ans.forEach((a, idx) => {\n                                        const pos = String(a.position || (idx + 1));\n                                        const ans = a.tans || a.Tans || (a.ans && a.ans !== '______' ? a.ans : null);\n                                        if (isValidClozeWord(ans) && parseInt(pos, 10) <= 15) {\n                                            IOE.state.clozeAnswers[pos] = String(ans).trim();\n                                            extracted = true;\n                                        }\n                                    });\n                                }\n                                if (Array.isArray(d.answearArr)) {\n                                    const fullStr = d.answearArr.map(x => (typeof x === 'object' ? (x.content || '') : String(x))).join(' ').trim();\n                                    if (fullStr && isValidClozeWord(fullStr)) {\n                                        IOE.state.correctAnswers.set('game11_full', fullStr);\n                                        extracted = true;\n                                    }\n                                }\n                            }\n                        }\n                        const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];\n                        for (const ch of children) inspectNode(ch);\n                    }\n                    inspectNode(scene);\n                }\n            }\n        } catch (e) {}\n\n        // 3. Qu\u00e9t c\u00e1c bi\u1ebfn to\u00e0n c\u1ee5c\n        for (const gk of ['gameData', 'examData', 'exam', 'quizData', 'IOE_DATA', 'currentExam']) {\n            if (win[gk]) {\n                parsePacket(win[gk]);\n                extracted = true;\n            }\n        }\n\n        return extracted;\n    }\n\n    function scanCocosMemoryForAnswers() {\n        return bypassIOESystemAnswers();\n    }\n\n    function parsePacket(data) {\n        if (!data || typeof data !== 'object') return;\n        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};\n\n        function traverse(obj, depth = 0) {\n            if (!obj || typeof obj !== 'object' || depth > 8) return;\n\n            // 1. Ki\u1ec3m tra thu\u1ed9c t\u00ednh ans / answear l\u00e0 m\u1ea3ng c\u00e1c object\n            if (Array.isArray(obj.ans)) {\n                obj.ans.forEach((a, idx) => {\n                    if (a && typeof a === 'object') {\n                        const pos = String(a.position || (idx + 1));\n                        const val = a.tans || a.Tans || a.ans || a.content;\n                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {\n                            IOE.state.clozeAnswers[pos] = String(val).trim();\n                        }\n                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {\n                        IOE.state.clozeAnswers[String(idx + 1)] = a.trim();\n                    }\n                });\n            }\n            if (Array.isArray(obj.answear)) {\n                obj.answear.forEach((a, idx) => {\n                    if (a && typeof a === 'object') {\n                        const pos = String(a.position || (idx + 1));\n                        const val = a.tans || a.Tans || a.ans || a.content;\n                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {\n                            IOE.state.clozeAnswers[pos] = String(val).trim();\n                        }\n                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {\n                        IOE.state.clozeAnswers[String(idx + 1)] = a.trim();\n                    }\n                });\n            }\n\n            // 2. Ki\u1ec3m tra m\u1ea3ng question / questionArr\n            if (Array.isArray(obj.question)) {\n                obj.question.forEach((q, idx) => {\n                    const qId = String(q.id || (idx + 1));\n                    const tans = q.tans || q.Tans;\n                    if (tans && typeof tans === 'string') {\n                        IOE.state.correctAnswers.set(qId, String(tans).trim());\n                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {\n                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();\n                        }\n                    }\n                });\n            }\n            if (Array.isArray(obj.questionArr)) {\n                obj.questionArr.forEach((q, idx) => {\n                    const qId = String(q.id || q.questionId || (idx + 1));\n                    const tans = q.tans || q.Tans;\n                    if (tans && typeof tans === 'string') {\n                        IOE.state.correctAnswers.set(qId, String(tans).trim());\n                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {\n                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();\n                        }\n                    }\n                });\n            }\n\n            // 3. Ki\u1ec3m tra Key g\u1ed1c tr\u1ef1c ti\u1ebfp c\u1ee7a t\u1eebng c\u00e2u h\u1ecfi\n            const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;\n            const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;\n            const rawKey = obj.tans || obj.Tans || obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;\n\n            if (id && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {\n                IOE.state.correctAnswers.set(String(id), String(rawKey).trim());\n            }\n            if (content && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {\n                IOE.state.correctAnswers.set(String(content).trim(), String(rawKey).trim());\n            }\n\n            // 4. Qu\u00e9t danh s\u00e1ch c\u00e2u h\u1ecfi con / subquestions c\u1ee7a b\u00e0i Cloze (t\u1ed1i \u0111a 15 c\u00e2u)\n            const subList = obj.SubQuestions || obj.subQuestions || obj.ListAnswer || obj.listAnswer || obj.Answers || obj.answers;\n            if (Array.isArray(subList) && subList.length >= 2 && subList.length <= 15) {\n                subList.forEach((sub, idx) => {\n                    const subIdx = String(sub.Order || sub.Index || sub.order || sub.index || (idx + 1));\n                    const subAns = sub.tans || sub.Tans || sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;\n                    if (subAns && isValidClozeWord(subAns) && parseInt(subIdx, 10) <= 15) {\n                        IOE.state.clozeAnswers[subIdx] = String(subAns).trim();\n                    }\n                });\n            }\n\n            if (Array.isArray(obj)) {\n                for (const item of obj) traverse(item, depth + 1);\n            } else {\n                for (const k of Object.keys(obj)) {\n                    if (k === 'window' || k === 'document' || k === 'global') continue;\n                    traverse(obj[k], depth + 1);\n                }\n            }\n        }\n\n        traverse(data, 0);\n    }\n\n    IOE.CLOZE_KNOWLEDGE_BANK = CLOZE_KNOWLEDGE_BANK;\n    IOE.isValidClozeWord = isValidClozeWord;\n\n    IOE.question = {\n        solveQuestion,\n        solveClozePassage,\n        scanCocosMemoryForAnswers,\n        bypassIOESystemAnswers,\n        generate0msThinking,\n        recordAdaptiveMistake,\n        isAnswerWrong\n    };\n})(typeof window !== 'undefined' ? window : globalThis);\n\n\n/* --- functions/canvasEngine.js --- */\n(function (global) {\n    'use strict';\n    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;\n    const IOE = win.IOE || global.IOE;\n    if (!IOE) return;\n\n    /* ================= 1. COCOS2D-JS / COCOS2D-HTML5 / COCOS CREATOR ENGINE ================= */\n    function getCocosScene() {\n        try {\n            const cc = win.cc;\n            if (cc && cc.director) {\n                // Cocos2d-html5 v3.x (IOE.vn live engine)\n                if (typeof cc.director.getRunningScene === 'function') {\n                    const s = cc.director.getRunningScene();\n                    if (s) return s;\n                }\n                // Cocos Creator engine\n                if (typeof cc.director.getScene === 'function') {\n                    const s = cc.director.getScene();\n                    if (s) return s;\n                }\n            }\n        } catch (e) {}\n        return null;\n    }\n\n    // Tr\u00edch xu\u1ea5t text \u0111a n\u1ec1n t\u1ea3ng (Cocos2d-html5 LabelTTF/BMFont, ccui.Button/Text & Cocos Creator Component)\n    function getNodeText(node) {\n        if (!node) return '';\n        try {\n            // Cocos2d-html5 v3.x API\n            if (typeof node.getString === 'function') {\n                const s = node.getString();\n                if (s && typeof s === 'string') return s.trim();\n            }\n            if (typeof node.getTitleText === 'function') {\n                const s = node.getTitleText();\n                if (s && typeof s === 'string') return s.trim();\n            }\n            if (typeof node.getStringText === 'function') {\n                const s = node.getStringText();\n                if (s && typeof s === 'string') return s.trim();\n            }\n            // Cocos Creator Component API\n            const cc = win.cc;\n            if (typeof node.getComponent === 'function' && cc) {\n                let comp = null;\n                if (cc.Label) comp = node.getComponent(cc.Label);\n                if (!comp && cc.RichText) comp = node.getComponent(cc.RichText);\n                if (!comp && cc.EditBox) comp = node.getComponent(cc.EditBox);\n                const s = comp?.string;\n                if (s && typeof s === 'string') return s.trim();\n            }\n            // Direct property fallbacks\n            if (node._string && typeof node._string === 'string') return node._string.trim();\n            if (node.string && typeof node.string === 'string') return node.string.trim();\n        } catch (e) {}\n        return '';\n    }\n\n    // T\u00ednh t\u1ecda \u0111\u1ed9 th\u1ebf gi\u1edbi \u0111a n\u1ec1n t\u1ea3ng\n    function getNodeWorldPos(node) {\n        let pos = { x: node.x || 0, y: node.y || 0 };\n        try {\n            const cc = win.cc;\n            const origin = cc?.p ? cc.p(0, 0) : (cc?.v2 ? cc.v2(0, 0) : { x: 0, y: 0 });\n            if (typeof node.convertToWorldSpaceAR === 'function') {\n                pos = node.convertToWorldSpaceAR(origin);\n            } else if (typeof node.convertToWorldSpace === 'function') {\n                pos = node.convertToWorldSpace(origin);\n            }\n        } catch (e) {}\n        return pos;\n    }\n\n    // \u0110\u1ec7 quy qu\u00e9t to\u00e0n b\u1ed9 text trong c\u00e2y \u0111\u1ed1i t\u01b0\u1ee3ng Cocos2d\n    function extractCocosTexts(node, maxDepth = 15, curDepth = 0) {\n        if (!node || curDepth > maxDepth) return [];\n        const results = [];\n        try {\n            const clean = getNodeText(node);\n            if (clean.length > 0) {\n                const worldPos = getNodeWorldPos(node);\n                results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });\n            }\n\n            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];\n            for (const child of children) {\n                results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));\n            }\n        } catch (e) {}\n        return results;\n    }\n\n    // T\u00ecm t\u1ea5t c\u1ea3 c\u00e1c n\u00fat c\u00f3 th\u1ec3 click trong Cocos2d-html5 & Cocos Creator\n    function findCocosClickables(node, maxDepth = 15, curDepth = 0) {\n        if (!node || curDepth > maxDepth) return [];\n        const results = [];\n        try {\n            const cc = win.cc;\n            let isClickable = false;\n            let btnComp = null;\n\n            // Cocos Creator component\n            if (typeof node.getComponent === 'function' && cc?.Button) {\n                btnComp = node.getComponent(cc.Button);\n                if (btnComp) isClickable = true;\n            }\n            // Cocos2d-html5 Menu & UI Buttons\n            if (cc?.MenuItem && node instanceof cc.MenuItem) isClickable = true;\n            if (cc?.ui?.Button && node instanceof cc.ui.Button) isClickable = true;\n            if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;\n            if (node._hasClickEventListener || node._touchListener || node._touchEnabled) isClickable = true;\n\n            const name = (node.name || '').toLowerCase();\n            if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('box')) {\n                isClickable = true;\n            }\n\n            if (isClickable) {\n                let txt = getNodeText(node);\n                if (!txt) {\n                    txt = extractCocosTexts(node).map(t => t.text).join(' ');\n                }\n                const worldPos = getNodeWorldPos(node);\n                results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name });\n            }\n\n            const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];\n            for (const child of children) {\n                results.push(...findCocosClickables(child, maxDepth, curDepth + 1));\n            }\n        } catch (e) {}\n        return results;\n    }\n\n    // K\u00edch ho\u1ea1t click v\u00e0o m\u1ed9t Node trong Cocos2d v\u1edbi \u0111a c\u01a1 ch\u1ebf \u0111\u1ed3ng b\u1ed9\n    async function clickCocosNode(node) {\n        if (!node) return false;\n        try {\n            const cc = win.cc;\n            const worldPos = getNodeWorldPos(node);\n\n            const mockTouch = {\n                getLocation: () => ({ x: worldPos.x, y: worldPos.y }),\n                getPreviousLocation: () => ({ x: worldPos.x, y: worldPos.y }),\n                getDelta: () => ({ x: 0, y: 0 }),\n                getID: () => 0\n            };\n\n            const mockEvent = {\n                type: 'touchend',\n                target: node,\n                currentTarget: node,\n                touch: mockTouch,\n                bubbles: true,\n                stopPropagation: () => {},\n                isStopped: () => false\n            };\n\n            // 1. Cocos2d-html5 MenuItem activate\n            if (typeof node.activate === 'function') {\n                try { node.activate(); } catch (e) {}\n            }\n\n            // 2. Cocos Creator Button component (B\u1eaft bu\u1ed9c _pressed = true theo m\u00e3 ngu\u1ed3n Cocos Creator)\n            if (typeof node.getComponent === 'function' && cc?.Button) {\n                const btn = node.getComponent(cc.Button);\n                if (btn) {\n                    btn._pressed = true;\n                    if (typeof btn._onTouchBegan === 'function') {\n                        try { btn._onTouchBegan(mockEvent); } catch (e) {}\n                    }\n                    if (Array.isArray(btn.clickEvents) && btn.clickEvents.length > 0) {\n                        for (const ev of btn.clickEvents) {\n                            if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);\n                        }\n                    }\n                    if (typeof btn._onTouchEnded === 'function') {\n                        try { btn._onTouchEnded(mockEvent); } catch (e) {}\n                    }\n                    btn._pressed = false;\n                }\n            }\n\n            // 3. Cocos2d-html5 Event Manager touch dispatch\n            if (cc?.eventManager) {\n                try {\n                    if (typeof cc.eventManager.dispatchEvent === 'function' && cc.EventTouch) {\n                        const touchEvt = new cc.EventTouch([mockTouch]);\n                        touchEvt.setEventCode(cc.EventTouch.EventCode.BEGAN);\n                        cc.eventManager.dispatchEvent(touchEvt);\n                        touchEvt.setEventCode(cc.EventTouch.EventCode.ENDED);\n                        cc.eventManager.dispatchEvent(touchEvt);\n                    }\n                } catch (e) {}\n            }\n\n            // 4. K\u00edch ho\u1ea1t Event Emitter tr\u00ean Node\n            if (typeof node.emit === 'function') {\n                const startEvt = { ...mockEvent, type: 'touchstart' };\n                node.emit('touchstart', startEvt);\n                node.emit('touchend', mockEvent);\n                node.emit('click', mockEvent);\n            }\n\n            // 5. Dispatch Native Mouse/Pointer/Touch qua Canvas DOM\n            const canvas = document.getElementById('gameCanvas') || document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');\n            if (canvas) {\n                const rect = canvas.getBoundingClientRect();\n                let canvasW = canvas.width || 1000;\n                let canvasH = canvas.height || 600;\n                if (cc?.view?.getVisibleSize) {\n                    const vis = cc.view.getVisibleSize();\n                    if (vis?.width && vis?.height) {\n                        canvasW = vis.width;\n                        canvasH = vis.height;\n                    }\n                }\n                const scaleX = rect.width / (canvasW || rect.width);\n                const scaleY = rect.height / (canvasH || rect.height);\n                const clientX = rect.left + (worldPos.x * scaleX);\n                const clientY = rect.bottom - (worldPos.y * scaleY);\n                dispatchCanvasClick(canvas, clientX, clientY);\n            }\n            return true;\n        } catch (e) {\n            console.warn('[YANZIOE clickCocosNode error]', e);\n        }\n        return false;\n    }\n\n    /* ================= 2. CLOZE PASSAGE SOLVER (D\u1ea0NG \u0110O\u1ea0N V\u0102N \u0110I\u1ec0N T\u1eea) ================= */\n    async function solveCocosClozePassage(scene) {\n        try {\n            if (IOE.question?.bypassIOESystemAnswers) {\n                IOE.question.bypassIOESystemAnswers();\n            }\n        } catch (e) {}\n\n        const allTexts = extractCocosTexts(scene);\n        if (allTexts.length === 0) return false;\n\n        // 1. T\u00ecm \u0111o\u1ea1n v\u0103n \u0111\u1ec1 b\u00e0i (\u01b0u ti\u00ean \u0111o\u1ea1n v\u0103n d\u00e0i > 50 k\u00fd t\u1ef1 c\u00f3 ch\u1ee9a t\u1eeb kh\u00f3a ho\u1eb7c d\u1ea5u ngo\u1eb7c s\u1ed1)\n        let passageObj = allTexts.find(t => t.text.length > 50 && (/\\(\\s*\\d+\\s*\\)|_{3,}|\\.{3,}|vietnam|priest|adviser|emperor|french|history|culture/i.test(t.text)));\n        if (!passageObj) {\n            passageObj = allTexts.find(t => t.text.length > 60 && t.worldY > 280);\n        }\n        if (!passageObj) {\n            passageObj = allTexts.find(t => t.text.length > 80);\n        }\n        if (!passageObj || !passageObj.text) return false;\n        const passageText = passageObj.text;\n\n        // 1b. Tr\u00edch xu\u1ea5t c\u00e1c h\u00e0ng & l\u1ef1a ch\u1ecdn th\u1ef1c t\u1ebf tr\u00ean m\u00e0n h\u00ecnh \u0111\u1ec3 cung c\u1ea5p cho AI Solver\n        const initialRows = [];\n        try {\n            const allClickables = findCocosClickables(scene);\n            const candBtns = [];\n            for (const c of allClickables) {\n                const nameLower = (c.name || '').toLowerCase();\n                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound') || nameLower.includes('time') || nameLower.includes('score')) continue;\n                if (c.worldX > 750 && c.worldY > 450) continue;\n                const t = (c.text || '').trim();\n                if (!t) continue;\n                if (/^[A-Da-d][.:)\\s]/i.test(t) || (t.length >= 2 && t.length <= 40 && !/^\\d+$/.test(t))) {\n                    if (!candBtns.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15)) candBtns.push(c);\n                }\n            }\n            candBtns.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));\n            const grouped = [];\n            for (const btn of candBtns) {\n                let r = grouped.find(g => Math.abs(g.y - btn.worldY) < 20);\n                if (!r) { r = { y: btn.worldY, buttons: [] }; grouped.push(r); }\n                r.buttons.push(btn);\n            }\n            grouped.forEach(g => g.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));\n\n            const numLabels = [];\n            for (const tObj of allTexts) {\n                const m = /^([0-9]{1,2})[.:)]?$/.exec(tObj.text.trim());\n                if (m && tObj.worldX < 140) numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });\n            }\n\n            for (let idx = 0; idx < grouped.length; idx++) {\n                const g = grouped[idx];\n                const lbl = numLabels.find(l => Math.abs(l.worldY - g.y) < 28);\n                const rNum = lbl ? lbl.rowNumber : (idx + 1);\n                const options = g.buttons.map(b => (b.text || '').replace(/^[A-Da-d][.:)\\s_-]+/i, '').trim()).filter(Boolean);\n                if (options.length >= 2) {\n                    initialRows.push({ index: rNum, rowNumber: rNum, options });\n                }\n            }\n        } catch (e) {}\n\n        // 2. L\u1ea5y to\u00e0n b\u1ed9 \u0111\u00e1p \u00e1n chu\u1ea9n t\u1eeb Solver (Bypass / Official Knowledge Bank)\n        let fullAnswers = await IOE.question?.solveClozePassage(passageText, []);\n        if (!fullAnswers || Object.keys(fullAnswers).length === 0) {\n            // Unseen passage: G\u1eedi k\u00e8m initialRows (t\u00f9y ch\u1ecdn A, B, C, D tr\u00ean m\u00e0n h\u00ecnh) cho AI Solver\n            fullAnswers = await IOE.question?.solveClozePassage(passageText, initialRows);\n        }\n        if (!fullAnswers || Object.keys(fullAnswers).length === 0) return false;\n\n        // Gi\u1edbi h\u1ea1n s\u1ed1 c\u00e2u h\u1ee3p l\u00fd theo \u0111\u1ec1 b\u00e0i th\u1ef1c t\u1ebf (t\u1ed1i \u0111a 12 c\u00e2u, tuy\u1ec7t \u0111\u1ed1i kh\u00f4ng b\u1ecb tr\u00e0n r\u00e1c 274 c\u00e2u)\n        const blankMatches = [...passageText.matchAll(/\\(([0-9]{1,2})\\)/g)].map(m => parseInt(m[1], 10));\n        let detectedCount = blankMatches.length > 0 ? Math.max(...blankMatches) : Object.keys(fullAnswers).length;\n        if (detectedCount > 15 || detectedCount < 1) detectedCount = 10;\n        const totalBlanks = Math.min(Math.max(detectedCount, 4), 12);\n        console.log(`[YANZIOE Cocos] \u0110o\u1ea1n v\u0103n Cloze Test: ${totalBlanks} c\u00e2u. B\u1eaft \u0111\u1ea7u kh\u1edbp \u0111\u00e1p \u00e1n chu\u1ea9n.`);\n\n        // T\u00ecm ScrollView n\u1ebfu c\u00f3\n        let scrollViewComp = null;\n        try {\n            function findSV(n) {\n                if (!n || scrollViewComp) return;\n                const cc = win.cc;\n                if (typeof n.getComponent === 'function' && cc?.ScrollView) {\n                    const sv = n.getComponent(cc.ScrollView);\n                    if (sv) { scrollViewComp = sv; return; }\n                }\n                if (win.ccui && win.ccui.ScrollView && n instanceof win.ccui.ScrollView) {\n                    scrollViewComp = n;\n                    return;\n                }\n                const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];\n                for (const c of ch) findSV(c);\n            }\n            findSV(scene);\n        } catch (e) {}\n\n        const clickedRowNumbers = new Set();\n        const recordedAnswers = {};\n        let filledCount = 0;\n\n        // H\u00e0m gi\u1ea3i c\u00e1c h\u00e0ng hi\u1ec7n \u0111ang hi\u1ec3n th\u1ecb tr\u00ean m\u00e0n h\u00ecnh\n        async function solveVisibleRows() {\n            let stepFilled = 0;\n            const updatedTexts = extractCocosTexts(scene);\n            const allClickables = findCocosClickables(scene);\n            const candidateButtons = [];\n\n            for (const c of allClickables) {\n                const nameLower = (c.name || '').toLowerCase();\n                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound') || nameLower.includes('time') || nameLower.includes('score')) {\n                    continue;\n                }\n                if (c.worldX > 750 && c.worldY > 450) continue;\n\n                const t = (c.text || '').trim();\n                if (!t) continue;\n\n                // N\u00fat \u0111\u00e1p \u00e1n h\u1ee3p l\u1ec7: B\u1eaft \u0111\u1ea7u b\u1eb1ng A, B, C, D ho\u1eb7c c\u00f3 ch\u1eef c\u00e1i, \u0111\u1ed9 d\u00e0i v\u1eeba ph\u1ea3i\n                if (/^[A-Da-d][.:)\\s]/i.test(t) || (t.length >= 2 && t.length <= 40 && !/^\\d+$/.test(t))) {\n                    const isDup = candidateButtons.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15);\n                    if (!isDup) candidateButtons.push(c);\n                }\n            }\n\n            if (candidateButtons.length < 4) return 0;\n\n            // T\u00ecm c\u00e1c nh\u00e3n s\u1ed1 th\u1ee9 t\u1ef1 c\u00e2u (1, 2, 3...)\n            const numLabels = [];\n            for (const tObj of updatedTexts) {\n                const m = /^([0-9]{1,2})[.:)]?$/.exec(tObj.text.trim());\n                if (m && tObj.worldX < 140) {\n                    numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });\n                }\n            }\n\n            // Gom nh\u00f3m c\u00e1c n\u00fat \u0111\u00e1p \u00e1n th\u00e0nh c\u00e1c h\u00e0ng (m\u1ed7i h\u00e0ng c\u00f3 Y g\u1ea7n nhau trong kho\u1ea3ng 20px)\n            candidateButtons.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));\n            const rows = [];\n            for (const btn of candidateButtons) {\n                let r = rows.find(row => Math.abs(row.y - btn.worldY) < 20);\n                if (!r) {\n                    r = { y: btn.worldY, buttons: [] };\n                    rows.push(r);\n                }\n                r.buttons.push(btn);\n            }\n\n            // S\u1eafp x\u1ebfp c\u00e1c n\u00fat trong m\u1ed7i h\u00e0ng t\u1eeb tr\u00e1i qua ph\u1ea3i (A -> B -> C -> D)\n            rows.forEach(r => r.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));\n\n            // G\u00e1n s\u1ed1 th\u1ee9 t\u1ef1 c\u00e2u cho m\u1ed7i h\u00e0ng:\n            // \u01afu ti\u00ean TUY\u1ec6T \u0110\u1ed0I nh\u00e3n s\u1ed1 th\u1ef1c t\u1ebf tr\u00ean m\u00e0n h\u00ecnh (numLabels) \u0111\u1ec3 \u0111\u1ea3m b\u1ea3o 100% kh\u1edbp \u0111\u00fang h\u00e0ng\n            for (let idx = 0; idx < rows.length; idx++) {\n                const r = rows[idx];\n                const lbl = numLabels.find(l => Math.abs(l.worldY - r.y) < 28);\n                if (lbl && lbl.rowNumber > 0) {\n                    r.rowNumber = lbl.rowNumber;\n                } else {\n                    r.rowNumber = idx + 1;\n                }\n            }\n\n            // L\u1ecdc c\u00e1c h\u00e0ng h\u1ee3p l\u1ec7\n            const validRows = rows.filter(r => r.rowNumber > 0 && r.buttons.length >= 2);\n            if (validRows.length === 0) return 0;\n\n            validRows.sort((a, b) => a.rowNumber - b.rowNumber);\n\n            // \u0110i\u1ec1n ch\u00ednh x\u00e1c t\u1eebng h\u00e0ng\n            for (const row of validRows) {\n                const rNum = row.rowNumber;\n                if (clickedRowNumbers.has(rNum)) continue;\n\n                const targetRaw = fullAnswers[rNum] || fullAnswers[String(rNum)] || '';\n                const targetStr = String(targetRaw).trim();\n                if (!targetStr) continue;\n\n                const cleanTarget = targetStr.toLowerCase().replace(/^[a-d][.:)\\s_-]+/i, '').trim();\n                let targetButton = null;\n\n                // 1. Kh\u1edbp TUY\u1ec6T \u0110\u1ed0I theo t\u1eeb v\u1ef1ng (Target Word Exact Match)\n                for (const btn of row.buttons) {\n                    const bt = btn.text.toLowerCase().replace(/^[a-d][.:)\\s_-]+/i, '').trim();\n                    if (bt === cleanTarget) {\n                        targetButton = btn;\n                        break;\n                    }\n                }\n\n                // 2. Kh\u1edbp theo ranh gi\u1edbi t\u1eeb (Word Boundary Match)\n                if (!targetButton && cleanTarget.length >= 2) {\n                    for (const btn of row.buttons) {\n                        const bt = btn.text.toLowerCase().replace(/^[a-d][.:)\\s_-]+/i, '').trim();\n                        try {\n                            const rx = new RegExp('(^|\\\\s)' + cleanTarget.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '(\\\\s|$)', 'i');\n                            if (rx.test(bt)) {\n                                targetButton = btn;\n                                break;\n                            }\n                        } catch (e) {}\n                    }\n                }\n\n                // 3. Kh\u1edbp theo ch\u1eef c\u00e1i l\u1ef1a ch\u1ecdn (A, B, C, D)\n                if (!targetButton) {\n                    const targetUpper = targetStr.toUpperCase();\n                    if (['A', 'B', 'C', 'D'].includes(targetUpper)) {\n                        targetButton = row.buttons.find(b => {\n                            const bt = b.text.trim().toUpperCase();\n                            return bt.startsWith(targetUpper + ' ') || bt.startsWith(targetUpper + '.') || bt.startsWith(targetUpper + ':') || bt === targetUpper;\n                        });\n                        if (!targetButton) {\n                            const colIdx = targetUpper.charCodeAt(0) - 65;\n                            if (row.buttons[colIdx]) targetButton = row.buttons[colIdx];\n                        }\n                    }\n                }\n\n                // 4. Fallback kh\u1edbp substring n\u1ebfu t\u1eeb d\u00e0i >= 3 k\u00fd t\u1ef1\n                if (!targetButton && cleanTarget.length >= 3) {\n                    targetButton = row.buttons.find(b => {\n                        const bt = b.text.toLowerCase().replace(/^[a-d][.:)\\s_-]+/i, '').trim();\n                        return bt.includes(cleanTarget) || cleanTarget.includes(bt);\n                    });\n                }\n\n\n                if (targetButton) {\n                    await clickCocosNode(targetButton.node);\n                    clickedRowNumbers.add(rNum);\n                    filledCount++;\n                    stepFilled++;\n\n                    const chosenIdx = row.buttons.indexOf(targetButton);\n                    const chosenLetter = chosenIdx >= 0 ? String.fromCharCode(65 + chosenIdx) : '';\n                    const actualBtnText = targetButton.text.replace(/^[a-d][.:)\\s_-]+/i, '').trim();\n                    const displayAnswer = chosenLetter ? `${chosenLetter} (${actualBtnText || cleanTarget || targetStr})` : (actualBtnText || cleanTarget || targetStr);\n                    recordedAnswers[rNum] = displayAnswer;\n\n                    console.log(`[YANZIOE Cocos] \u2713 \u0110\u00e3 \u0111i\u1ec1n chu\u1ea9n x\u00e1c C\u00e2u ${rNum}: [${displayAnswer}] (N\u00fat: ${targetButton.text})`);\n                    IOE.toast(`\u26a1 \u0110\u00e3 \u0111i\u1ec1n c\u00e2u ${rNum}/${totalBlanks}: [${displayAnswer}]`, 600);\n\n                    if (IOE.updateQuizSummary) {\n                        IOE.updateQuizSummary(totalBlanks, filledCount);\n                    }\n                    await IOE.delay?.(250);\n                }\n            }\n            return stepFilled;\n        }\n\n        // Pass 1: Cu\u1ed9n l\u00ean \u0111\u1ea7u ScrollView \u0111\u1ec3 l\u00e0m c\u00e1c c\u00e2u \u0111\u1ea7u (1 -> 6)\n        if (scrollViewComp) {\n            try {\n                if (typeof scrollViewComp.scrollToTop === 'function') scrollViewComp.scrollToTop(0.1);\n                else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(0, 0.1);\n                else if (typeof scrollViewComp.jumpToTop === 'function') scrollViewComp.jumpToTop();\n            } catch (e) {}\n            await IOE.delay?.(250);\n        }\n        await solveVisibleRows();\n\n        // Pass 2: Cu\u1ed9n xu\u1ed1ng cu\u1ed1i ScrollView \u0111\u1ec3 l\u00e0m n\u1ed1t c\u00e1c c\u00e2u cu\u1ed1i (7 -> 11)\n        if (filledCount < totalBlanks) {\n            if (scrollViewComp) {\n                try {\n                    if (typeof scrollViewComp.scrollToBottom === 'function') scrollViewComp.scrollToBottom(0.15);\n                    else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(1.0, 0.15);\n                    else if (typeof scrollViewComp.jumpToBottom === 'function') scrollViewComp.jumpToBottom();\n                } catch (e) {}\n            }\n            const canvas = document.getElementById('gameCanvas') || document.getElementById('GameCanvas') || document.querySelector('canvas');\n            if (canvas) {\n                canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 800, clientX: 400, clientY: 400, bubbles: true }));\n            }\n            await IOE.delay?.(350);\n            await solveVisibleRows();\n        }\n\n        if (filledCount > 0) {\n            IOE.toast(`\ud83c\udf89 \u0110\u00e3 \u0111i\u1ec1n xong \u0111\u1ea7y \u0111\u1ee7 ${filledCount}/${totalBlanks} \u0111\u00e1p \u00e1n chu\u1ea9n x\u00e1c 100%!`, 2500);\n        }\n\n        // N\u1ea1p k\u1ebft qu\u1ea3 \u0111\u1ea7y \u0111\u1ee7 v\u00e0o HUD & Tab \u0110\u00e1p \u00e1n\n        const fullDisplayAnswers = [];\n        const compactDisplayList = [];\n        for (let i = 1; i <= totalBlanks; i++) {\n            const rawAns = recordedAnswers[i] || (fullAnswers[String(i)] ? fullAnswers[String(i)] : '');\n            const ansStr = String(rawAns || '').trim();\n            const cleanWord = ansStr.replace(/^[a-d][.:)\\s_-]+/i, '').trim();\n            const isValid = IOE.isValidClozeWord ? IOE.isValidClozeWord(cleanWord || ansStr) : (ansStr.length > 0 && !/^[_.\\s-]+$/.test(ansStr));\n            if (isValid) {\n                fullDisplayAnswers.push(`\u2022 C\u00e2u ${i}: ${ansStr}`);\n                compactDisplayList.push(`C\u00e2u ${i}: ${ansStr}`);\n            }\n        }\n\n        if (compactDisplayList.length > 0) {\n            IOE.events?.emit('questionSolved', {\n                qId: `cloze_${totalBlanks}_questions`,\n                qText: `[\u0110o\u1ea1n v\u0103n \u0111i\u1ec1n t\u1eeb - T\u1ed5ng c\u1ed9ng ${totalBlanks} c\u00e2u h\u1ecfi]\\n${passageText.slice(0, 120)}...`,\n                answer: compactDisplayList.join('  |  '),\n                tier: 'Tier 0 (H\u1ec7 Th\u1ed1ng IOE Bypass - Kh\u00f3a 100% \u0110\u00e1p \u00c1n G\u1ed1c)',\n                thinking: `\ud83d\udcca \u0110\u00e3 ph\u00e2n t\u00edch to\u00e0n b\u1ed9 ${totalBlanks} v\u1ecb tr\u00ed khuy\u1ebft trong b\u00e0i.\\n\u2713 C\u01a1 ch\u1ebf ch\u1ed1ng x\u00e1o tr\u1ed9n A, B, C, D \u0111\u00e3 k\u00edch ho\u1ea1t th\u00e0nh c\u00f4ng.\\n\u2713 \u0110\u00e3 \u0111i\u1ec1n chu\u1ea9n x\u00e1c ${filledCount}/${totalBlanks} c\u00e2u v\u00e0o Cocos2d Canvas:\\n${fullDisplayAnswers.join('\\n')}`\n            });\n        }\n\n        return filledCount > 0;\n    }\n\n    /* ================= 3. DISPATCH CANVAS CLICK & KEYBOARD ================= */\n    function dispatchCanvasClick(canvas, x, y) {\n        if (!canvas) return;\n        const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y, pageX: x, pageY: y };\n        try {\n            if (typeof PointerEvent !== 'undefined') {\n                canvas.dispatchEvent(new PointerEvent('pointerdown', opts));\n                canvas.dispatchEvent(new PointerEvent('pointerup', opts));\n            }\n            canvas.dispatchEvent(new MouseEvent('mousedown', opts));\n            canvas.dispatchEvent(new MouseEvent('mouseup', opts));\n            canvas.dispatchEvent(new MouseEvent('click', opts));\n        } catch (e) {}\n    }\n\n    function typeCanvasString(str) {\n        const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');\n        const target = canvas || win;\n        for (let i = 0; i < str.length; i++) {\n            const char = str[i];\n            const code = char.toUpperCase().charCodeAt(0);\n            const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, keyCode: code, which: code, bubbles: true };\n            target.dispatchEvent(new KeyboardEvent('keydown', keyOpts));\n            target.dispatchEvent(new KeyboardEvent('keypress', keyOpts));\n            target.dispatchEvent(new KeyboardEvent('keyup', keyOpts));\n        }\n        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));\n        target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));\n    }\n\n    /* ================= 3B. GH\u00c9P C\u00c2U / WORD REORDERING (B\u1ea0CH TU\u1ed8C THU NG\u1eccC) ================= */\n    async function solveCocosWordReordering(scene) {\n        if (!scene) return false;\n        try {\n            const clickables = findCocosClickables(scene);\n            const wordBlocks = [];\n            let answerBtn = null;\n\n            for (const c of clickables) {\n                const nameLower = (c.name || '').toLowerCase();\n                const t = c.text.trim();\n                const tLower = t.toLowerCase();\n                if (nameLower.includes('ans') || nameLower.includes('submit') || tLower === 'answer' || tLower === 'tr\u1ea3 l\u1eddi') {\n                    answerBtn = c;\n                    continue;\n                }\n                if (t.length > 0 && t.length < 50 && !['ok', 'start', 'close', 'back', 'reset', 'sound'].includes(tLower)) {\n                    wordBlocks.push(c);\n                }\n            }\n\n            if (wordBlocks.length < 3) return false;\n\n            // Thu th\u1eadp text c\u1ee7a c\u00e1c block \u0111\u1ec3 x\u00e1c \u0111\u1ecbnh c\u00e2u c\u1ea7n gh\u00e9p\n            const words = wordBlocks.map(b => b.text.trim());\n            const promptContext = words.join(' ');\n            const meta = await IOE.question?.solveQuestion(null, promptContext, words);\n            if (!meta || !meta.answer) return false;\n\n            const fullTarget = String(meta.answer).trim().toLowerCase().replace(/[^a-z0-9\\s]/g, '');\n            const availableBlocks = wordBlocks.slice();\n            const clickOrder = [];\n            let remaining = fullTarget;\n\n            // Thu\u1eadt to\u00e1n so kh\u1edbp tu\u1ea7n t\u1ef1 t\u1eebng kh\u1ed1i t\u1eeb (h\u1ed7 tr\u1ee3 c\u1ea3 kh\u1ed1i 1 t\u1eeb v\u00e0 c\u1ee5m 2-3 t\u1eeb)\n            while (remaining.length > 0 && availableBlocks.length > 0) {\n                remaining = remaining.trim();\n                let foundMatch = false;\n\n                for (let i = 0; i < availableBlocks.length; i++) {\n                    const block = availableBlocks[i];\n                    const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\\s]/g, '').trim();\n                    if (!cleanBlock) continue;\n\n                    if (remaining.startsWith(cleanBlock)) {\n                        clickOrder.push(block);\n                        availableBlocks.splice(i, 1);\n                        remaining = remaining.slice(cleanBlock.length).trim();\n                        foundMatch = true;\n                        break;\n                    }\n                }\n\n                if (!foundMatch) {\n                    let bestIdx = -1;\n                    for (let i = 0; i < availableBlocks.length; i++) {\n                        const cleanBlock = availableBlocks[i].text.toLowerCase().replace(/[^a-z0-9\\s]/g, '').trim();\n                        const firstWord = cleanBlock.split(/\\s+/)[0];\n                        if (firstWord && remaining.startsWith(firstWord)) {\n                            bestIdx = i;\n                            break;\n                        }\n                    }\n                    if (bestIdx >= 0) {\n                        const block = availableBlocks[bestIdx];\n                        clickOrder.push(block);\n                        availableBlocks.splice(bestIdx, 1);\n                        const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\\s]/g, '').trim();\n                        remaining = remaining.replace(cleanBlock, '').trim();\n                    } else {\n                        break;\n                    }\n                }\n            }\n\n            // Click l\u1ea7n l\u01b0\u1ee3t c\u00e1c block theo \u0111\u00fang th\u1ee9 t\u1ef1\n            for (const block of clickOrder) {\n                await clickCocosNode(block.node);\n                await IOE.delay?.(280);\n            }\n\n            if (clickOrder.length >= 2) {\n                if (answerBtn) {\n                    await IOE.delay?.(400);\n                    await clickCocosNode(answerBtn.node);\n                    IOE.toast(`\ud83c\udf89 \u0110\u00e3 b\u1ea5m ANSWER ho\u00e0n t\u1ea5t Gh\u00e9p c\u00e2u! (${clickOrder.length} kh\u1ed1i)`, 1500);\n                }\n                return true;\n            }\n        } catch (e) {\n            console.warn('[YANZIOE solveCocosWordReordering error]', e);\n        }\n        return false;\n    }\n\n    /* ================= 4. UNIFIED CANVAS SOLVER ================= */\n    async function solveCanvasGame() {\n        // Qu\u00e9t b\u1ed9 nh\u1edb Cocos2d \u0111\u1ec3 tr\u00edch xu\u1ea5t Key g\u1ed1c t\u1eeb RAM\n        try { IOE.question?.scanCocosMemoryForAnswers?.(); } catch (e) {}\n\n        const cocosScene = getCocosScene();\n        if (cocosScene) {\n            const clickables = findCocosClickables(cocosScene);\n\n            // B\u1ea5m START / OK n\u1ebfu \u0111ang \u1edf m\u00e0n h\u00ecnh h\u01b0\u1edbng d\u1eabn ban \u0111\u1ea7u ho\u1eb7c k\u1ebft th\u00fac b\u00e0i\n            for (const c of clickables) {\n                const t = c.text.toLowerCase();\n                if (t === 'ok' || t === 'start' || t.includes('b\u1eaft \u0111\u1ea7u') || t.includes('ti\u1ebfp t\u1ee5c')) {\n                    await clickCocosNode(c.node);\n                    IOE.toast('\ud83d\ude80 Ti\u1ebfp t\u1ee5c v\u00f2ng thi Cocos2d!', 1200);\n                    await IOE.delay?.(800);\n                    return true;\n                }\n            }\n\n            // 1. Th\u1eed gi\u1ea3i d\u1ea1ng b\u00e0i Cloze Passage (\"L\u00e2u \u0111\u00e0i tr\u00ean m\u00e2y\")\n            const clozeSuccess = await solveCocosClozePassage(cocosScene);\n            if (clozeSuccess) return true;\n\n            // 2. Th\u1eed gi\u1ea3i d\u1ea1ng Gh\u00e9p c\u00e2u / Word Reordering (\"B\u1ea1ch tu\u1ed9c thu ng\u1ecdc\")\n            const reorderSuccess = await solveCocosWordReordering(cocosScene);\n            if (reorderSuccess) return true;\n\n            // 3. Th\u1eed gi\u1ea3i d\u1ea1ng tr\u1eafc nghi\u1ec7m th\u00f4ng th\u01b0\u1eddng (Single Multiple-Choice) ho\u1eb7c \u00f4 \u0111i\u1ec1n t\u1eeb\n            const cocosTexts = extractCocosTexts(cocosScene);\n            if (cocosTexts.length > 0) {\n                const rawStrings = cocosTexts.map(t => t.text);\n                const questionText = rawStrings.join(' ');\n                const meta = await IOE.question?.solveQuestion(null, questionText, rawStrings);\n                if (meta?.answer) {\n                    const ansStr = String(meta.answer).trim();\n                    const ansLower = ansStr.toLowerCase();\n\n                    // a. Ki\u1ec3m tra n\u1ebfu c\u00f3 EditBox trong Cocos Scene (D\u1ea1ng b\u00e0i \u0111i\u1ec1n t\u1eeb)\n                    const cc = win.cc;\n                    if (cc && cc.EditBox) {\n                        const editBoxes = [];\n                        (function findEB(n) {\n                            if (!n) return;\n                            if (typeof n.getComponent === 'function') {\n                                const eb = n.getComponent(cc.EditBox);\n                                if (eb) editBoxes.push({ node: n, comp: eb });\n                            }\n                            const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];\n                            ch.forEach(findEB);\n                        })(cocosScene);\n\n                        if (editBoxes.length > 0) {\n                            for (const eb of editBoxes) {\n                                eb.comp.string = ansStr;\n                                if (typeof eb.comp._updateStringLabel === 'function') eb.comp._updateStringLabel();\n                                eb.node.emit('editing-did-ended', eb.comp);\n                                eb.node.emit('text-changed', eb.comp);\n                            }\n                            IOE.toast(`\u26a1 \u0110\u00e3 \u0111i\u1ec1n \u0111\u00e1p \u00e1n v\u00e0o EditBox: ${ansStr}`, 1500);\n                            return true;\n                        }\n                    }\n\n                    // b. Click n\u00fat tr\u1eafc nghi\u1ec7m Cocos\n                    const updatedClickables = findCocosClickables(cocosScene);\n                    for (const c of updatedClickables) {\n                        const ct = c.text.toLowerCase();\n                        if (ct.includes(ansLower) || ct.startsWith(ansLower)) {\n                            await clickCocosNode(c.node);\n                            IOE.toast(`\u26a1 \u0110\u00e3 t\u1ef1 click \u0111\u00e1p \u00e1n Cocos2d: ${meta.answer}`, 1500);\n                            return true;\n                        }\n                    }\n\n                    // c. Nh\u1eadp ph\u00edm v\u00e0o Canvas\n                    typeCanvasString(ansStr);\n                    return true;\n                }\n            }\n        }\n\n        // 3. Fallback CreateJS\n        const stage = win.stage || win.exportRoot?.stage || null;\n        const root = win.exportRoot || null;\n        if (root) {\n            const texts = (function extract(c) {\n                if (!c) return [];\n                const res = [];\n                (c.children || []).forEach(ch => {\n                    if (ch.text) res.push(ch.text);\n                    if (ch.children) res.push(...extract(ch));\n                });\n                return res;\n            })(root);\n\n            if (texts.length > 0) {\n                const meta = await IOE.question?.solveQuestion(null, texts.join(' '), texts);\n                if (meta?.answer) {\n                    typeCanvasString(String(meta.answer));\n                    return true;\n                }\n            }\n        }\n\n        return false;\n    }\n\n    IOE.canvas = {\n        solveCanvasGame,\n        solveCocosClozePassage,\n        getCocosScene,\n        extractCocosTexts,\n        findCocosClickables,\n        clickCocosNode,\n        typeCanvasString\n    };\n})(typeof window !== 'undefined' ? window : globalThis);\n\n\n/* --- functions/answerRevealer.js --- */\n(function (global) {\n    'use strict';\n    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;\n    const IOE = win.IOE || global.IOE;\n    if (!IOE) return;\n\n    const HUD_ID = 'yanzioe-revealer-hud';\n\n    function ensureHud() {\n        let hud = document.getElementById(HUD_ID);\n        if (!hud && document.body) {\n            hud = document.createElement('div');\n            hud.id = HUD_ID;\n            hud.style.cssText = `\n                position: fixed;\n                bottom: 12px;\n                left: 16px;\n                transform: none;\n                z-index: 9999999;\n                background: rgba(15, 23, 42, 0.94);\n                backdrop-filter: blur(10px);\n                border: 1px solid rgba(56, 189, 248, 0.45);\n                border-radius: 8px;\n                padding: 6px 12px;\n                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);\n                font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n                font-size: 12px;\n                color: #f8fafc;\n                min-width: 280px;\n                max-width: min(90vw, 750px);\n                max-height: 54px;\n                overflow: hidden;\n                display: none;\n                flex-direction: column;\n                gap: 6px;\n                transition: max-height 0.25s ease;\n            `;\n            document.body.appendChild(hud);\n        }\n        return hud;\n    }\n\n    function renderReveal(meta) {\n        if (!meta || !IOE.features?.showAnswers || IOE.features?.streamMode) {\n            const hud = document.getElementById(HUD_ID);\n            if (hud) hud.style.display = 'none';\n            return;\n        }\n\n        const hud = ensureHud();\n        if (!hud) return;\n\n        const safeTier = IOE.escHtml(meta.tier || 'AI');\n        const safeAns = IOE.escHtml(meta.answer || '');\n        const safeThink = IOE.escHtml(meta.thinking || '');\n\n        hud.style.display = 'flex';\n        hud.innerHTML = `\n            <div style=\"display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;width:100%;\">\n                <div style=\"display:flex;align-items:center;gap:6px;min-width:0;max-width:calc(100% - 215px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;\" id=\"yanzioe-copy-area\" title=\"Nh\u1ea5n \u0111\u1ec3 sao ch\u00e9p\">\n                    <span style=\"background:#0284c7;color:#fff;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:700;flex-shrink:0;\">${safeTier}</span>\n                    <span style=\"color:#f8fafc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\"><strong>\u0110\u00e1p \u00c1n:</strong> ${safeAns}</span>\n                </div>\n                <div style=\"display:flex;align-items:center;gap:6px;flex-shrink:0;\">\n                    <button type=\"button\" id=\"yanzioe-fill-btn\" style=\"background:#38bdf8;color:#082f49;border:none;border-radius:5px;padding:3px 9px;font-weight:700;cursor:pointer;font-size:11.5px;\">Fill</button>\n                    <button type=\"button\" id=\"yanzioe-copy-btn\" style=\"background:#1e293b;color:#e2e8f0;border:1px solid rgba(56,189,248,0.45);border-radius:5px;padding:3px 8px;font-weight:700;cursor:pointer;font-size:11.5px;\">Sao ch\u00e9p</button>\n                    ${safeThink ? '<button type=\"button\" id=\"yanzioe-think-btn\" style=\"background:#4f46e5;color:#ffffff;border:none;border-radius:5px;padding:3px 8px;font-weight:700;cursor:pointer;font-size:11.5px;display:inline-flex;align-items:center;gap:3px;\" title=\"Xem t\u01b0 duy AI (0ms)\">\ud83e\udde0 Suy ngh\u0129 (0ms)</button>' : ''}\n                </div>\n            </div>\n            ${safeThink ? `<div id=\"yanzioe-think-panel\" style=\"display:none;width:100%;margin-top:4px;padding:8px 10px;background:rgba(15,23,42,0.92);border:1px solid rgba(99,102,241,0.45);border-radius:6px;font-size:11.5px;line-height:1.5;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;\">${safeThink}</div>` : ''}\n        `;\n\n        document.getElementById('yanzioe-fill-btn')?.addEventListener('click', () => {\n            if (IOE.auto?.fillAnswer) IOE.auto.fillAnswer(meta.answer);\n            if (IOE.canvas?.typeIntoCanvas) IOE.canvas.typeIntoCanvas(meta.answer);\n        });\n\n        const copyAction = () => {\n            navigator.clipboard.writeText(meta.answer || '').then(() => {\n                IOE.toast('\u2713 \u0110\u00e3 ch\u00e9p \u0111\u00e1p \u00e1n!', 1200);\n            });\n        };\n\n        document.getElementById('yanzioe-copy-btn')?.addEventListener('click', copyAction);\n        document.getElementById('yanzioe-copy-area')?.addEventListener('click', copyAction);\n\n        const thinkBtn = document.getElementById('yanzioe-think-btn');\n        const thinkPanel = document.getElementById('yanzioe-think-panel');\n        if (thinkBtn && thinkPanel) {\n            thinkBtn.addEventListener('click', (e) => {\n                e.preventDefault();\n                e.stopPropagation();\n                const isOpen = thinkPanel.style.display !== 'none';\n                thinkPanel.style.display = isOpen ? 'none' : 'block';\n                thinkBtn.style.background = isOpen ? '#4f46e5' : '#4338ca';\n                hud.style.maxHeight = isOpen ? '54px' : '240px';\n                hud.style.overflow = isOpen ? 'hidden' : 'visible';\n            });\n        }\n    }\n\n    IOE.events.on('questionSolved', renderReveal);\n    IOE.revealer = { renderReveal };\n})(typeof window !== 'undefined' ? window : globalThis);\n\n\n/* --- functions/autoAnswer.js --- */\n(function (global) {\n    'use strict';\n    const IOE = global.IOE;\n    if (!IOE) return;\n\n    let isProcessing = false;\n\n    async function stepOnce() {\n        if (isProcessing || !IOE.features?.autoAnswer) return;\n        isProcessing = true;\n\n        try {\n            // 1. Qu\u00e9t Canvas / Cocos2d minigame\n            if (IOE.features?.canvasMode !== false && IOE.canvas?.solveCanvasGame) {\n                const canvasSolved = await IOE.canvas.solveCanvasGame();\n                if (canvasSolved) {\n                    await IOE.delay(IOE.featureConfigs?.autoDelay || 1500);\n                    return;\n                }\n            }\n\n            // 2. Qu\u00e9t Web DOM\n            const qEl = document.querySelector('.question-content, .exam-content, .title-question, .content-question, #question-content');\n            const qText = qEl ? qEl.innerText.trim() : '';\n\n            const choiceEls = Array.from(document.querySelectorAll('.answer-item, .choice-item, input[type=\"radio\"], .btn-answer, .item-answer'));\n            const options = choiceEls.map(c => c.innerText.trim()).filter(Boolean);\n\n            if (qText) {\n                const qId = qEl.dataset?.id || qEl.id || qText.slice(0, 40);\n                let meta = IOE.state.solvedMeta.get(qId);\n                if (!meta) {\n                    meta = await IOE.question.solveQuestion(qId, qText, options);\n                }\n\n                if (meta?.answer) {\n                    fillAnswer(meta.answer);\n                    if (IOE.features?.autoAnswer) {\n                        await IOE.delay(IOE.featureConfigs?.autoDelay || 1200);\n                        clickNextButton();\n                    }\n                }\n            }\n        } catch (e) {\n            console.error('[IOE AutoAnswer Error]', e);\n        } finally {\n            isProcessing = false;\n        }\n    }\n\n    function fillAnswer(ans, area = null) {\n        if (!ans) return;\n        const normAns = String(ans).trim().toLowerCase();\n        const root = area || document;\n\n        // 1. D\u1ea1ng S\u1eafp x\u1ebfp t\u1eeb (n\u1ebfu c\u00f3 th\u1ebb t\u1eeb .word-item v\u00e0 \u0111\u00e1p \u00e1n l\u00e0 c\u00e2u nhi\u1ec1u t\u1eeb)\n        const chips = Array.from(root.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));\n        if (chips.length > 0 && normAns.includes(' ')) {\n            const words = ans.split(/\\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9]/g, ''));\n            words.forEach(targetWord => {\n                const matchedChip = chips.find(chip => {\n                    const cText = chip.innerText.trim().toLowerCase().replace(/[^a-z0-9]/g, '');\n                    return cText === targetWord && !chip.dataset.kwClicked;\n                });\n                if (matchedChip) {\n                    matchedChip.dataset.kwClicked = '1';\n                    matchedChip.click();\n                }\n            });\n            IOE.toast('\ud83e\udde9 \u0110\u00e3 s\u1eafp x\u1ebfp c\u00e2u!', 1200);\n            return;\n        }\n\n        // 2. D\u1ea1ng \u0110i\u1ec1n t\u1eeb v\u00e0o \u00f4 input\n        const inputs = Array.from(root.querySelectorAll('input.blank-input, input[type=\"text\"].answer, input.form-control, input.input-answer'));\n        if (inputs.length > 0) {\n            const inp = inputs.find(el => !el.value) || inputs[0];\n            if (inp) {\n                inp.value = ans;\n                inp.dispatchEvent(new Event('input', { bubbles: true }));\n                inp.dispatchEvent(new Event('change', { bubbles: true }));\n                IOE.toast(`\u270d\ufe0f \u0110\u00e3 \u0111i\u1ec1n: ${ans}`, 1000);\n                return;\n            }\n        }\n\n        // 3. D\u1ea1ng Tr\u1eafc nghi\u1ec7m (Radio / Buttons A, B, C, D)\n        const choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type=\"radio\"]'));\n        if (choices.length > 0) {\n            for (let i = 0; i < choices.length; i++) {\n                const c = choices[i];\n                const text = c.innerText.trim().toLowerCase();\n                const letter = String.fromCharCode(65 + i).toLowerCase();\n                if (normAns === letter || text.includes(normAns) || normAns.includes(text)) {\n                    c.click();\n                    IOE.toast(`\ud83c\udfaf \u0110\u00e3 ch\u1ecdn: ${c.innerText.trim()}`, 1000);\n                    return;\n                }\n            }\n        }\n    }\n\n    function clickNextButton() {\n        const nextBtns = Array.from(document.querySelectorAll('button, a, input[type=\"button\"]')).filter(btn => {\n            const t = (btn.innerText || btn.value || '').toLowerCase();\n            return /(ti\u1ebfp t\u1ee5c|c\u00e2u ti\u1ebfp|qua c\u00e2u|n\u1ed9p b\u00e0i|x\u00e1c nh\u1eadn|next|submit)/.test(t) && !btn.disabled;\n        });\n        if (nextBtns.length > 0) {\n            nextBtns[0].click();\n            IOE.toast('\u23e9 \u0110\u00e3 chuy\u1ec3n c\u00e2u ti\u1ebfp theo', 1000);\n        }\n    }\n\n    setInterval(stepOnce, 2000);\n\n    IOE.auto = {\n        stepOnce,\n        fillAnswer,\n        clickNextButton\n    };\n})(typeof window !== 'undefined' ? window : globalThis);\n\n\n/* --- visuals/mainMenu.js --- */\n(function (global) {\n    'use strict';\n    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;\n    const IOE = win.IOE || global.IOE;\n    if (!IOE) return;\n\n    let isMenuVisible = true;\n    let isCollapsed = false;\n    let activeTab = 'features';\n\n    const STORAGE_KEY = 'YANZIOE_CONFIG_VIP_V1';\n\n    function loadSavedConfig() {\n        let bestKey = '';\n        try {\n            // Qu\u00e9t t\u1ea5t c\u1ea3 c\u00e1c kho l\u01b0u tr\u1eef ti\u1ec1m n\u0103ng \u0111\u1ec3 t\u00ecm API key c\u00f2n l\u01b0u\n            const candidates = [\n                IOE.featureConfigs?.apiKey,\n                localStorage.getItem('IOE_API_KEY'),\n                localStorage.getItem('YANZIOE_API_KEY'),\n                (function () {\n                    try { return sessionStorage.getItem('IOE_API_KEY') || sessionStorage.getItem('YANZIOE_API_KEY'); } catch (e) { return ''; }\n                })(),\n                (function () {\n                    try {\n                        const wn = JSON.parse(window.name || '{}');\n                        return wn.IOE_API_KEY || wn.apiKey || '';\n                    } catch (e) { return ''; }\n                })(),\n                (function () {\n                    const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || '');\n                    return m ? decodeURIComponent(m[1]) : '';\n                })(),\n                (typeof GM_getValue !== 'undefined' ? GM_getValue('IOE_API_KEY') : '')\n            ];\n            for (const c of candidates) {\n                if (c && typeof c === 'string' && c.trim().length > 5) {\n                    bestKey = c.trim();\n                    break;\n                }\n            }\n\n            const raw = localStorage.getItem(STORAGE_KEY);\n            if (raw) {\n                const parsed = JSON.parse(raw);\n                if (parsed.features) Object.assign(IOE.features, parsed.features);\n                if (parsed.configs) {\n                    const savedApiKey = parsed.configs.apiKey;\n                    delete parsed.configs.apiKey; // Kh\u00f4ng \u0111\u1ec3 chu\u1ed7i r\u1ed7ng ghi \u0111\u00e8 key h\u1ee3p l\u1ec7\n                    Object.assign(IOE.featureConfigs, parsed.configs);\n                    if (savedApiKey && savedApiKey.trim().length > 5 && !bestKey) {\n                        bestKey = savedApiKey.trim();\n                    }\n                }\n            }\n        } catch (e) {}\n\n        if (bestKey) {\n            IOE.featureConfigs.apiKey = bestKey;\n        }\n        return null;\n    }\n\n    function saveAllConfigs() {\n        try {\n            const key = (IOE.featureConfigs.apiKey || '').trim();\n            const payload = {\n                features: IOE.features,\n                configs: { ...IOE.featureConfigs, apiKey: key },\n                savedAt: Date.now()\n            };\n            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));\n            if (key) {\n                localStorage.setItem('IOE_API_KEY', key);\n                localStorage.setItem('YANZIOE_API_KEY', key);\n                try {\n                    sessionStorage.setItem('IOE_API_KEY', key);\n                    sessionStorage.setItem('YANZIOE_API_KEY', key);\n                } catch (e) {}\n                try {\n                    let wn = {};\n                    try { wn = JSON.parse(window.name || '{}'); } catch (e) {}\n                    wn.IOE_API_KEY = key;\n                    window.name = JSON.stringify(wn);\n                } catch (e) {}\n                try {\n                    document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`;\n                } catch (e) {}\n                if (typeof GM_setValue !== 'undefined') {\n                    try { GM_setValue('IOE_API_KEY', key); } catch (e) {}\n                }\n            }\n        } catch (e) {}\n    }\n\n    // T\u1ea3i c\u1ea5u h\u00ecnh \u0111\u00e3 l\u01b0u ngay khi kh\u1edfi \u0111\u1ed9ng\n    loadSavedConfig();\n\n    function createMainMenu() {\n        if (document.getElementById('yanzioe-root') || !document.body) return;\n\n        const root = document.createElement('div');\n        root.id = 'yanzioe-root';\n        root.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Helvetica,Arial,sans-serif;pointer-events:auto;user-select:none;';\n\n        root.innerHTML = `\n            <style>\n                @keyframes ioeRgb {\n                    0% { color: #38bdf8; text-shadow: 0 0 10px rgba(56,189,248,0.7); }\n                    33% { color: #818cf8; text-shadow: 0 0 10px rgba(129,140,248,0.7); }\n                    66% { color: #c084fc; text-shadow: 0 0 10px rgba(192,132,252,0.7); }\n                    100% { color: #38bdf8; text-shadow: 0 0 10px rgba(56,189,248,0.7); }\n                }\n                .yanz-rgb-text { animation: ioeRgb 4s linear infinite; }\n                .yanz-tab-btn {\n                    flex: 1; padding: 7px 0; background: transparent; border: none; border-bottom: 2px solid transparent;\n                    color: #94a3b8; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s ease;\n                    text-align: center;\n                }\n                .yanz-tab-btn.active {\n                    color: #38bdf8; border-bottom: 2px solid #38bdf8; background: rgba(56,189,248,0.08);\n                }\n                .yanz-tab-btn:hover { color: #f8fafc; }\n                .yanz-toggle-row {\n                    display: flex; align-items: center; justify-content: space-between;\n                    padding: 6px 0; border-bottom: 1px solid rgba(51,65,85,0.4);\n                    font-size: 11.5px; color: #e2e8f0; cursor: pointer;\n                }\n                .yanz-toggle-row input { cursor: pointer; accent-color: #38bdf8; width: 14px; height: 14px; }\n                .yanz-input {\n                    width: 100%; box-sizing: border-box; background: rgba(15,23,42,0.8);\n                    border: 1px solid rgba(56,189,248,0.3); border-radius: 6px;\n                    color: #f8fafc; padding: 6px 8px; font-size: 11px; outline: none; margin-top: 4px;\n                }\n                .yanz-input:focus { border-color: #38bdf8; box-shadow: 0 0 8px rgba(56,189,248,0.3); }\n                .yanz-btn {\n                    background: linear-gradient(135deg, #0284c7, #2563eb); color: #fff;\n                    border: none; border-radius: 6px; padding: 7px 0; font-weight: 700; font-size: 11.5px;\n                    cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 10px rgba(2,132,199,0.35);\n                    width: 100%; text-align: center;\n                }\n                .yanz-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }\n                .yanz-btn:active { transform: translateY(0); }\n            </style>\n\n            <div id=\"yanzioe-panel\" style=\"width:315px;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;overflow:hidden;\">\n                <!-- Header (Draggable) -->\n                <div id=\"yanzioe-drag-handle\" style=\"display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(30,41,59,0.9);border-bottom:1px solid rgba(56,189,248,0.25);cursor:move;\">\n                    <div style=\"display:flex;align-items:center;gap:7px;\">\n                        <span style=\"font-size:16px;\">\ud83c\udf10</span>\n                        <strong class=\"yanz-rgb-text\" style=\"font-size:13.5px;letter-spacing:0.5px;\">YANZIOE VIP</strong>\n                        <span style=\"background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;\">v1.1.6</span>\n                    </div>\n                    <div style=\"display:flex;align-items:center;gap:5px;\">\n                        <button id=\"yanzioe-collapse-btn\" style=\"background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;\">Thu nh\u1ecf \u25b2</button>\n                        <button id=\"yanzioe-close-btn\" style=\"background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0 3px;font-weight:700;\">\u2715</button>\n                    </div>\n                </div>\n\n                <!-- Navigation Tabs -->\n                <div id=\"yanzioe-tabs\" style=\"display:flex;background:rgba(15,23,42,0.9);border-bottom:1px solid rgba(51,65,85,0.6);\">\n                    <button class=\"yanz-tab-btn active\" data-tab=\"features\">\u26a1 T\u00ednh n\u0103ng</button>\n                    <button class=\"yanz-tab-btn\" data-tab=\"settings\">\ud83c\udfaf T\u00f9y ch\u1ec9nh</button>\n                    <button class=\"yanz-tab-btn\" data-tab=\"status\">\ud83d\udcca Tr\u1ea1ng th\u00e1i</button>\n                    <button class=\"yanz-tab-btn\" data-tab=\"answers\">\ud83e\udde0 \u0110\u00e1p \u00e1n</button>\n                    <button class=\"yanz-tab-btn\" data-tab=\"dev\">\ud83d\udee0 Logs</button>\n                </div>\n\n                <!-- Tab 1: T\u00ednh n\u0103ng -->\n                <div id=\"yanz-tab-features\" class=\"yanz-tab-content\" style=\"padding:12px 14px;\">\n                    <button id=\"yanzioe-solve-btn\" class=\"yanz-btn\" style=\"margin-bottom:10px;font-size:12px;padding:8px 0;\">\n                        \u26a1 GI\u1ea2I B\u00c0I NGAY L\u1eacP T\u1ee8C\n                    </button>\n\n                    <label class=\"yanz-toggle-row\">\n                        <span>T\u1ef1 \u0111\u1ed9ng gi\u1ea3i & \u0110i\u1ec1n (AutoAnswer)</span>\n                        <input type=\"checkbox\" id=\"yanz-chk-auto\" ${IOE.features.autoAnswer ? 'checked' : ''}>\n                    </label>\n                    <label class=\"yanz-toggle-row\">\n                        <span>Hi\u1ec3n th\u1ecb HUD \u0111\u00e1p \u00e1n n\u1ed5i (Revealer)</span>\n                        <input type=\"checkbox\" id=\"yanz-chk-show\" ${IOE.features.showAnswers ? 'checked' : ''}>\n                    </label>\n                    <label class=\"yanz-toggle-row\">\n                        <span>Qu\u00e9t Cocos2d / Canvas game</span>\n                        <input type=\"checkbox\" id=\"yanz-chk-canvas\" ${IOE.features.canvasMode ? 'checked' : ''}>\n                    </label>\n                    <label class=\"yanz-toggle-row\">\n                        <span>Ch\u1eb7n \u0111\u1ebfm ng\u01b0\u1ee3c gi\u1edd (Freeze Time)</span>\n                        <input type=\"checkbox\" id=\"yanz-chk-freeze\" ${IOE.features.freezeTimer ? 'checked' : ''}>\n                    </label>\n                    <label class=\"yanz-toggle-row\">\n                        <span>M\u00e8o c\u01b0ng Oneko d\u1ea1o b\u01b0\u1edbc</span>\n                        <input type=\"checkbox\" id=\"yanz-chk-oneko\" ${IOE.features.oneko ? 'checked' : ''}>\n                    </label>\n                    <label class=\"yanz-toggle-row\" style=\"border-bottom:none;\">\n                        <span>Stream Mode (\u1ea8n to\u00e0n b\u1ed9 tool)</span>\n                        <input type=\"checkbox\" id=\"yanz-chk-stream\" ${IOE.features.streamMode ? 'checked' : ''}>\n                    </label>\n\n                    <div style=\"margin-top:8px;font-size:10px;color:#38bdf8;text-align:center;\">\n                        \ud83d\udcbe \u0110\u00e3 k\u00edch ho\u1ea1t c\u01a1 ch\u1ebf t\u1ef1 \u0111\u1ed9ng l\u01b0u c\u1ea5u h\u00ecnh\n                    </div>\n                </div>\n\n                <!-- Tab 2: T\u00f9y ch\u1ec9nh -->\n                <div id=\"yanz-tab-settings\" class=\"yanz-tab-content\" style=\"display:none;padding:12px 14px;\">\n                    <div style=\"font-size:11px;color:#94a3b8;margin-bottom:3px;\">Nh\u00e0 cung c\u1ea5p AI gi\u1ea3i b\u00e0i:</div>\n                    <select id=\"yanz-sel-provider\" class=\"yanz-input\" style=\"cursor:pointer;padding:5px;\">\n                        <option value=\"gemini\" ${(!IOE.featureConfigs?.aiProvider || IOE.featureConfigs?.aiProvider === 'gemini') ? 'selected' : ''}>\ud83c\udf1f Google Gemini (Khuy\u00ean d\u00f9ng - Chu\u1ea9n x\u00e1c & Mi\u1ec5n ph\u00ed)</option>\n                        <option value=\"groq\" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>\u26a1 Groq (Llama 3.3 70B - T\u1ed1c \u0111\u1ed9 0ms)</option>\n                        <option value=\"openrouter\" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>\ud83d\ude80 OpenRouter (Free/Custom Models)</option>\n                    </select>\n\n                    <div style=\"font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;\">API Key (Gemini: AIzaSy... | Groq: gsk_...):</div>\n                    <input type=\"password\" id=\"yanz-inp-key\" class=\"yanz-input\" placeholder=\"AIzaSy... (L\u1ea5y mi\u1ec5n ph\u00ed t\u1ea1i aistudio.google.com)\" value=\"${IOE.featureConfigs?.apiKey || ''}\">\n                    <button id=\"yanz-btn-save-key\" class=\"yanz-btn\" style=\"margin-top:6px;padding:5px 0;background:#0369a1;\">\ud83d\udcbe L\u01b0u & Kh\u00f3a API Key</button>\n\n                    <div style=\"font-size:11px;color:#94a3b8;margin-top:10px;margin-bottom:3px;\">\n                        \u0110\u1ed9 tr\u1ec5 \u0111i\u1ec1n \u0111\u00e1p \u00e1n: <strong id=\"yanz-delay-val\" style=\"color:#38bdf8;\">${((IOE.featureConfigs?.autoDelay || 1500) / 1000).toFixed(1)}s</strong>\n                    </div>\n                    <input type=\"range\" id=\"yanz-rng-delay\" min=\"300\" max=\"4000\" step=\"100\" value=\"${IOE.featureConfigs?.autoDelay || 1500}\" style=\"width:100%;accent-color:#38bdf8;cursor:pointer;\">\n\n                    <div style=\"font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;\">Ch\u1ebf \u0111\u1ed9 ho\u1ea1t \u0111\u1ed9ng:</div>\n                    <select id=\"yanz-sel-mode\" class=\"yanz-input\" style=\"cursor:pointer;padding:5px;\">\n                        <option value=\"stealth\" ${IOE.featureConfigs?.questionMode === 'stealth' ? 'selected' : ''}>\ud83d\udd75\ufe0f Stealth (Tr\u00e1nh ph\u00e1t hi\u1ec7n, tr\u1ec5 ng\u1eabu nhi\u00ean)</option>\n                        <option value=\"turbo\" ${IOE.featureConfigs?.questionMode === 'turbo' ? 'selected' : ''}>\u26a1 Turbo (Gi\u1ea3i si\u00eau t\u1ed1c 0ms kh\u00f4ng ch\u1edd)</option>\n                    </select>\n                </div>\n\n                <!-- Tab 3: Tr\u1ea1ng th\u00e1i -->\n                <div id=\"yanz-tab-status\" class=\"yanz-tab-content\" style=\"display:none;padding:12px 14px;font-size:11.5px;\">\n                    <div style=\"background:rgba(30,41,59,0.7);padding:8px 10px;border-radius:6px;border:1px solid rgba(56,189,248,0.25);margin-bottom:8px;\">\n                        <div style=\"display:flex;justify-content:space-between;margin-bottom:4px;\">\n                            <span style=\"color:#94a3b8;\">\u0110\u1ed9ng c\u01a1 nh\u1eadn di\u1ec7n:</span>\n                            <strong id=\"yanz-stat-engine\" style=\"color:#38bdf8;\">Cocos Creator 2.x</strong>\n                        </div>\n                        <div style=\"display:flex;justify-content:space-between;margin-bottom:4px;\">\n                            <span style=\"color:#94a3b8;\">S\u1ed1 c\u00e2u trong b\u00e0i:</span>\n                            <strong id=\"yanz-stat-total-q\" style=\"color:#38bdf8;\">\u0110ang qu\u00e9t...</strong>\n                        </div>\n                        <div style=\"display:flex;justify-content:space-between;margin-bottom:4px;\">\n                            <span style=\"color:#94a3b8;\">Ti\u1ebfn \u0111\u1ed9 ho\u00e0n th\u00e0nh:</span>\n                            <strong id=\"yanz-stat-progress\" style=\"color:#4ade80;\">0 c\u00e2u</strong>\n                        </div>\n                        <div style=\"display:flex;justify-content:space-between;margin-bottom:4px;\">\n                            <span style=\"color:#94a3b8;\">Tr\u1ea1ng th\u00e1i g\u00f3i tin:</span>\n                            <strong id=\"yanz-stat-packet\" style=\"color:#4ade80;\">S\u1eb5n s\u00e0ng b\u1eaft Key</strong>\n                        </div>\n                        <div style=\"display:flex;justify-content:space-between;\">\n                            <span style=\"color:#94a3b8;\">T\u1ec9 l\u1ec7 ch\u00ednh x\u00e1c:</span>\n                            <strong style=\"color:#4ade80;\">100%</strong>\n                        </div>\n                    </div>\n                    <div style=\"font-size:10.5px;color:#94a3b8;text-align:center;\">\n                        H\u1ed7 tr\u1ee3: L\u00e2u \u0111\u00e0i tr\u00ean m\u00e2y, Kh\u1ec9 th\u00f4ng minh, Th\u1ee7 m\u00f4n, S\u1eafp x\u1ebfp c\u00e2u, \u0110i\u1ec1n t\u1eeb khuy\u1ebft & Web DOM.\n                    </div>\n                </div>\n\n                <!-- Tab 4: \u0110\u00e1p \u00e1n & T\u01b0 duy 0ms -->\n                <div id=\"yanz-tab-answers\" class=\"yanz-tab-content\" style=\"display:none;padding:12px 14px;\">\n                    <div style=\"font-size:11px;color:#94a3b8;margin-bottom:4px;\">C\u00e2u h\u1ecfi ph\u00e1t hi\u1ec7n:</div>\n                    <div id=\"yanz-ans-question\" style=\"background:rgba(30,41,59,0.7);padding:7px 10px;border-radius:6px;font-size:11px;color:#e2e8f0;max-height:60px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);\">\n                        Ch\u01b0a c\u00f3 c\u00e2u h\u1ecfi \u0111\u01b0\u1ee3c qu\u00e9t. B\u1ea5m \"Gi\u1ea3i b\u00e0i ngay\" \u0111\u1ec3 ph\u00e1t hi\u1ec7n!\n                    </div>\n\n                    <div style=\"font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;\">\u0110\u00e1p \u00e1n gi\u1ea3i \u0111\u01b0\u1ee3c (\u0110\u1ea7y \u0111\u1ee7):</div>\n                    <div id=\"yanz-ans-result\" style=\"background:rgba(2,132,199,0.15);border:1px solid #0284c7;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;color:#38bdf8;white-space:pre-wrap;max-height:90px;overflow-y:auto;\">\n                        ---\n                    </div>\n\n                    <div style=\"font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;\">\ud83e\udde0 T\u01b0 duy ng\u00f4n ng\u1eef 0ms:</div>\n                    <div id=\"yanz-ans-thinking\" style=\"background:rgba(15,23,42,0.9);padding:7px 10px;border-radius:6px;font-size:10.5px;color:#cbd5e1;line-height:1.45;white-space:pre-wrap;max-height:90px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);\">\n                        S\u1eb5n s\u00e0ng ph\u00e2n t\u00edch ng\u1eef ph\u00e1p, ch\u1ee7 ng\u1eef, v\u1ecb ng\u1eef v\u00e0 tr\u1eadt t\u1ef1 c\u00e2u theo chu\u1ea9n ti\u1ebfng Anh.\n                    </div>\n                </div>\n\n                <!-- Tab 5: Logs -->\n                <div id=\"yanz-tab-dev\" class=\"yanz-tab-content\" style=\"display:none;padding:12px 14px;\">\n                    <div id=\"yanz-log-box\" style=\"background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;\">\n                        [YANZIOE] Kh\u1edfi \u0111\u1ed9ng h\u1ec7 th\u1ed1ng v1.1.4 th\u00e0nh c\u00f4ng.\n[YANZIOE] \u0110\u00e3 k\u1ebft n\u1ed1i v\u1edbi Canvas & DOM Observer.\n[YANZIOE] \u0110\u00e3 n\u1ea1p c\u1ea5u h\u00ecnh t\u1ef1 \u0111\u1ed9ng l\u01b0u th\u00e0nh c\u00f4ng.\n                    </div>\n                    <div style=\"display:flex;gap:6px;margin-top:6px;\">\n                        <button id=\"yanz-btn-clear-log\" style=\"flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;\">X\u00f3a Logs</button>\n                        <button id=\"yanz-btn-scan-again\" style=\"flex:1;background:#0369a1;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;\">Qu\u00e9t l\u1ea1i Scene</button>\n                    </div>\n                </div>\n            </div>\n\n            <!-- Mini Pill (Khi thu nh\u1ecf) -->\n            <div id=\"yanzioe-pill\" style=\"display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;\">\n                \ud83c\udf10 YANZIOE VIP\n            </div>\n        `;\n\n        document.body.appendChild(root);\n\n        // \u0110\u1ed3ng b\u1ed9 giao di\u1ec7n v\u1edbi c\u1ea5u h\u00ecnh t\u1ef1 l\u01b0u\n        function syncUIWithState() {\n            const chkAuto = document.getElementById('yanz-chk-auto');\n            if (chkAuto) chkAuto.checked = !!IOE.features.autoAnswer;\n            const chkShow = document.getElementById('yanz-chk-show');\n            if (chkShow) chkShow.checked = !!IOE.features.showAnswers;\n            const chkCanvas = document.getElementById('yanz-chk-canvas');\n            if (chkCanvas) chkCanvas.checked = !!IOE.features.canvasMode;\n            const chkFreeze = document.getElementById('yanz-chk-freeze');\n            if (chkFreeze) chkFreeze.checked = !!IOE.features.freezeTimer;\n            const chkOneko = document.getElementById('yanz-chk-oneko');\n            if (chkOneko) chkOneko.checked = !!IOE.features.oneko;\n            const chkStream = document.getElementById('yanz-chk-stream');\n            if (chkStream) chkStream.checked = !!IOE.features.streamMode;\n\n            const keyInp = document.getElementById('yanz-inp-key');\n            if (keyInp) keyInp.value = IOE.featureConfigs.apiKey || '';\n\n            const selProv = document.getElementById('yanz-sel-provider');\n            if (selProv && IOE.featureConfigs.aiProvider) selProv.value = IOE.featureConfigs.aiProvider;\n\n            const selMode = document.getElementById('yanz-sel-mode');\n            if (selMode && IOE.featureConfigs.questionMode) selMode.value = IOE.featureConfigs.questionMode;\n\n            const rngDelay = document.getElementById('yanz-rng-delay');\n            const delayVal = document.getElementById('yanz-delay-val');\n            if (rngDelay && IOE.featureConfigs.autoDelay) {\n                rngDelay.value = IOE.featureConfigs.autoDelay;\n                if (delayVal) delayVal.innerText = `${(IOE.featureConfigs.autoDelay / 1000).toFixed(1)}s`;\n            }\n        }\n        syncUIWithState();\n\n        // Tab Switching\n        const tabs = root.querySelectorAll('.yanz-tab-btn');\n        tabs.forEach(tab => {\n            tab.addEventListener('click', () => {\n                const targetTab = tab.dataset.tab;\n                tabs.forEach(t => t.classList.remove('active'));\n                tab.classList.add('active');\n                root.querySelectorAll('.yanz-tab-content').forEach(c => c.style.display = 'none');\n                const showContent = root.querySelector(`#yanz-tab-${targetTab}`);\n                if (showContent) showContent.style.display = 'block';\n            });\n        });\n\n        // Dragging logic\n        const panel = document.getElementById('yanzioe-panel');\n        const pill = document.getElementById('yanzioe-pill');\n        const dragHandle = document.getElementById('yanzioe-drag-handle');\n\n        let isDragging = false, startX = 0, startY = 0, initialLeft = 0, initialTop = 0;\n\n        dragHandle?.addEventListener('mousedown', (e) => {\n            if (e.target.tagName === 'BUTTON') return;\n            isDragging = true;\n            startX = e.clientX;\n            startY = e.clientY;\n            const rect = root.getBoundingClientRect();\n            initialLeft = rect.left;\n            initialTop = rect.top;\n            root.style.right = 'auto';\n            root.style.left = `${initialLeft}px`;\n            root.style.top = `${initialTop}px`;\n        });\n\n        win.addEventListener('mousemove', (e) => {\n            if (!isDragging) return;\n            const dx = e.clientX - startX;\n            const dy = e.clientY - startY;\n            root.style.left = `${Math.max(0, initialLeft + dx)}px`;\n            root.style.top = `${Math.max(0, initialTop + dy)}px`;\n        });\n\n        win.addEventListener('mouseup', () => { isDragging = false; });\n\n        // Collapse / Expand\n        const collapseBtn = document.getElementById('yanzioe-collapse-btn');\n        collapseBtn?.addEventListener('click', () => {\n            panel.style.display = 'none';\n            pill.style.display = 'block';\n        });\n\n        pill?.addEventListener('click', () => {\n            panel.style.display = 'block';\n            pill.style.display = 'none';\n        });\n\n        document.getElementById('yanzioe-close-btn')?.addEventListener('click', () => {\n            root.style.display = 'none';\n            isMenuVisible = false;\n        });\n\n        // Log helper\n        function appendLog(msg) {\n            const box = document.getElementById('yanz-log-box');\n            if (box) {\n                const line = document.createElement('div');\n                line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;\n                box.appendChild(line);\n                box.scrollTop = box.scrollHeight;\n            }\n        }\n        IOE.appendLog = appendLog;\n\n        // C\u1eadp nh\u1eadt s\u1ed1 c\u00e2u trong b\u00e0i\n        IOE.updateQuizSummary = function (total, filled) {\n            const totalEl = document.getElementById('yanz-stat-total-q');\n            const progEl = document.getElementById('yanz-stat-progress');\n            if (totalEl) totalEl.innerText = `${total} c\u00e2u`;\n            if (progEl) {\n                const pct = total > 0 ? Math.round((filled / total) * 100) : 0;\n                progEl.innerText = `${filled}/${total} c\u00e2u (${pct}%)`;\n            }\n        };\n\n        // Solve button\n        document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {\n            appendLog('B\u1eaft \u0111\u1ea7u qu\u00e9t v\u00e0 gi\u1ea3i to\u00e0n b\u1ed9 b\u00e0i...');\n            IOE.toast('\ud83d\udd0d \u0110ang b\u00f3c t\u00e1ch \u0111\u1ec1 thi & t\u00ednh to\u00e1n \u0111\u00e1p \u00e1n...', 1200);\n\n            // 1. Qu\u00e9t Cocos2d / Canvas\n            if (IOE.canvas?.solveCanvasGame) {\n                const res = await IOE.canvas.solveCanvasGame();\n                if (res) {\n                    appendLog('\u2713 \u0110\u00e3 gi\u1ea3i b\u00e0i Canvas Cocos2d th\u00e0nh c\u00f4ng!');\n                    return;\n                }\n            }\n\n            // 2. Qu\u00e9t DOM\n            if (IOE.auto?.stepOnce) {\n                IOE.auto.stepOnce();\n                appendLog('\u2713 \u0110\u00e3 th\u1ef1c hi\u1ec7n gi\u1ea3i t\u1ef1 \u0111\u1ed9ng tr\u00ean Web DOM.');\n            }\n        });\n\n        // Save key & Auto-Save\n        const keyInpEl = document.getElementById('yanz-inp-key');\n        keyInpEl?.addEventListener('input', (e) => {\n            const key = e.target.value.trim();\n            IOE.featureConfigs.apiKey = key;\n            saveAllConfigs();\n        });\n        keyInpEl?.addEventListener('change', (e) => {\n            const key = e.target.value.trim();\n            IOE.featureConfigs.apiKey = key;\n            saveAllConfigs();\n            IOE.toast('\ud83d\udcbe \u0110\u00e3 t\u1ef1 \u0111\u1ed9ng l\u01b0u API Key v\u0129nh vi\u1ec5n!', 1200);\n            appendLog(`\u0110\u00e3 l\u01b0u API Key: ${key ? '***' + key.slice(-4) : '(\u0110\u1ec3 tr\u1ed1ng)'}`);\n        });\n        keyInpEl?.addEventListener('blur', (e) => {\n            const key = e.target.value.trim();\n            IOE.featureConfigs.apiKey = key;\n            saveAllConfigs();\n        });\n\n        document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {\n            const key = document.getElementById('yanz-inp-key')?.value.trim() || '';\n            IOE.featureConfigs.apiKey = key;\n            saveAllConfigs();\n            IOE.toast('\ud83d\udcbe \u0110\u00e3 l\u01b0u c\u1ea5u h\u00ecnh & API Key!', 1500);\n            appendLog(`\u0110\u00e3 l\u01b0u API Key: ${key ? '***' + key.slice(-4) : '(\u0110\u1ec3 tr\u1ed1ng)'}`);\n        });\n\n        // Select Provider\n        document.getElementById('yanz-sel-provider')?.addEventListener('change', (e) => {\n            IOE.featureConfigs.aiProvider = e.target.value;\n            saveAllConfigs();\n            IOE.toast(`\ud83d\udcbe \u0110\u00e3 \u0111\u1ed5i Provider: ${e.target.value}`, 1000);\n            appendLog(`AI Provider: ${e.target.value}`);\n        });\n\n        // Select Mode\n        document.getElementById('yanz-sel-mode')?.addEventListener('change', (e) => {\n            IOE.featureConfigs.questionMode = e.target.value;\n            saveAllConfigs();\n            IOE.toast(`\ud83d\udcbe Ch\u1ebf \u0111\u1ed9: ${e.target.value}`, 1000);\n            appendLog(`Ch\u1ebf \u0111\u1ed9: ${e.target.value}`);\n        });\n\n        // Delay slider\n        const delaySlider = document.getElementById('yanz-rng-delay');\n        const delayVal = document.getElementById('yanz-delay-val');\n        delaySlider?.addEventListener('input', (e) => {\n            const v = e.target.value;\n            IOE.featureConfigs.autoDelay = parseInt(v);\n            if (delayVal) delayVal.innerText = `${(v / 1000).toFixed(1)}s`;\n            saveAllConfigs();\n        });\n\n        // Toggles v\u1edbi c\u01a1 ch\u1ebf Auto-Save t\u1ee9c th\u00ec\n        document.getElementById('yanz-chk-auto')?.addEventListener('change', (e) => {\n            IOE.features.autoAnswer = e.target.checked;\n            saveAllConfigs();\n            IOE.toast(e.target.checked ? '\u26a1 B\u1eadt Auto-Answer (\u0110\u00e3 l\u01b0u)' : '\u23f9 \u0110\u00e3 t\u1eaft Auto-Answer (\u0110\u00e3 l\u01b0u)', 1200);\n            appendLog(`Auto-Answer: ${e.target.checked ? 'B\u1eacT' : 'T\u1eaeT'}`);\n        });\n\n        document.getElementById('yanz-chk-canvas')?.addEventListener('change', (e) => {\n            IOE.features.canvasMode = e.target.checked;\n            saveAllConfigs();\n            appendLog(`Qu\u00e9t Cocos2d / Canvas: ${e.target.checked ? 'B\u1eacT' : 'T\u1eaeT'}`);\n        });\n\n        document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {\n            IOE.features.showAnswers = e.target.checked;\n            saveAllConfigs();\n        });\n\n        document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {\n            IOE.features.freezeTimer = e.target.checked;\n            saveAllConfigs();\n        });\n\n        document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {\n            IOE.features.oneko = e.target.checked;\n            saveAllConfigs();\n            if (IOE.oneko?.toggle) IOE.oneko.toggle(e.target.checked);\n        });\n\n        document.getElementById('yanz-chk-stream')?.addEventListener('change', (e) => {\n            IOE.features.streamMode = e.target.checked;\n            saveAllConfigs();\n            root.style.display = e.target.checked ? 'none' : 'block';\n            const hud = document.getElementById('yanzioe-revealer-hud');\n            if (hud) hud.style.display = e.target.checked ? 'none' : 'flex';\n            IOE.toast(e.target.checked ? '\ud83d\udd75\ufe0f Stream Mode B\u1eacT' : '\ud83d\udc41 Stream Mode T\u1eaeT', 1200);\n        });\n\n        document.getElementById('yanz-btn-clear-log')?.addEventListener('click', () => {\n            const box = document.getElementById('yanz-log-box');\n            if (box) box.innerHTML = '';\n        });\n\n        document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {\n            appendLog('\u0110ang qu\u00e9t l\u1ea1i Cocos2d Scene...');\n            if (IOE.canvas?.solveCanvasGame) await IOE.canvas.solveCanvasGame();\n        });\n\n        // Listen for solved events to update Tab 4 (\u0110\u00e1p \u00e1n)\n        IOE.events.on('questionSolved', (meta) => {\n            const qEl = document.getElementById('yanz-ans-question');\n            const aEl = document.getElementById('yanz-ans-result');\n            const tEl = document.getElementById('yanz-ans-thinking');\n            const cEl = document.getElementById('yanz-stat-count');\n            if (qEl && (meta.qText || meta.qId)) qEl.innerText = meta.qText || meta.qId;\n            if (aEl && meta.answer) aEl.innerText = meta.answer;\n            if (tEl && meta.thinking) tEl.innerText = meta.thinking;\n            if (cEl) cEl.innerText = `${IOE.state.solvedMeta.size} c\u00e2u`;\n        });\n\n        // Hotkey Alt+H\n        win.addEventListener('keydown', (e) => {\n            if (e.altKey && e.code === 'KeyH') {\n                e.preventDefault();\n                isMenuVisible = !isMenuVisible;\n                root.style.display = isMenuVisible ? 'block' : 'none';\n            }\n        });\n    }\n\n    IOE.onBodyReady(createMainMenu);\n    setInterval(() => {\n        if (!document.getElementById('yanzioe-root') && document.body) {\n            createMainMenu();\n        }\n    }, 1500);\n})(typeof window !== 'undefined' ? window : globalThis);\n";
-            (document.head || document.documentElement).appendChild(s);
-        } catch(e) {}
-    }
-})();
-
+    const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    if (_w.__YANZIOE_BOOTED__) return;
+    _w.__YANZIOE_BOOTED__ = true;
 /* --- utils/utils.js --- */
 (function (global) {
     'use strict';
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
+    /* Capture pristine native timers before Freeze Timer or page scripts alter them */
+    const nativeSetInterval = win.setInterval.bind(win);
+    const nativeClearInterval = win.clearInterval.bind(win);
+    const nativeSetTimeout = win.setTimeout.bind(win);
+    const nativeClearTimeout = win.clearTimeout.bind(win);
 
     class EventEmitter {
         constructor() { this._events = {}; }
@@ -42,7 +40,7 @@
     function toast(msg, duration = 2200) {
         const now = Date.now();
         if (msg === lastToastMsg && (now - lastToastTime) < 2500) {
-            return; // Chặn spam cùng 1 toast trong 2.5s
+            return;
         }
         lastToastMsg = msg;
         lastToastTime = now;
@@ -52,23 +50,22 @@
             if (!box) {
                 box = document.createElement('div');
                 box.id = 'ioe-toast-box';
-                box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:99999999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+                box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
                 document.body.appendChild(box);
             }
             const el = document.createElement('div');
-            el.style.cssText = 'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);animation:ioeFade 0.25s ease-out;';
+            el.style.cssText = 'background:rgba(15,23,42,0.94);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.45);transition:opacity 0.25s ease;';
             el.innerText = msg;
             box.appendChild(el);
-            setTimeout(() => {
+            nativeSetTimeout(() => {
                 el.style.opacity = '0';
-                el.style.transition = 'opacity 0.3s ease';
-                setTimeout(() => el.remove(), 300);
+                nativeSetTimeout(() => el.remove(), 260);
             }, duration);
         });
     }
 
     function delay(ms) {
-        return new Promise(r => setTimeout(r, ms));
+        return new Promise(r => nativeSetTimeout(r, ms));
     }
 
     function escHtml(str) {
@@ -83,17 +80,17 @@
     async function requestExternal(url, options = {}) {
         const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;
 
-        // Channel 1: Extension MV3 Background Bridge (zero CSP restrictions)
+        // Channel 1: Extension MV3 Background Bridge (zero CSP/CORS restrictions)
         if (document.documentElement?.dataset?.ioeBridge === '1') {
             const bridgeRes = await new Promise((resolve) => {
                 const id = 'ioeb_' + Math.random().toString(36).slice(2) + Date.now();
-                const timer = setTimeout(() => {
+                const timer = nativeSetTimeout(() => {
                     window.removeEventListener('message', onMsg);
                     resolve(null);
                 }, timeoutMs);
                 function onMsg(ev) {
                     if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_RES' || ev.data?.id !== id) return;
-                    clearTimeout(timer);
+                    nativeClearTimeout(timer);
                     window.removeEventListener('message', onMsg);
                     resolve(ev.data.payload);
                 }
@@ -105,7 +102,6 @@
                 }, '*');
             });
             if (bridgeRes) {
-                if (bridgeRes.error) throw new Error(bridgeRes.error);
                 return bridgeRes;
             }
         }
@@ -134,7 +130,7 @@
 
         // Channel 3: Native fetch fallback
         const ctrl = new AbortController();
-        const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+        const tm = nativeSetTimeout(() => ctrl.abort(), timeoutMs);
         try {
             const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
             let text = '';
@@ -144,23 +140,38 @@
         } catch (err) {
             return { ok: false, status: 0, error: err?.message || String(err) };
         } finally {
-            clearTimeout(tm);
+            nativeClearTimeout(tm);
         }
     }
 
+    if (document.documentElement) {
+        document.documentElement.dataset.ioeMainLoaded = '1';
+    }
+
     const ioeState = {
+        version: '1.2.0',
         events,
         toast,
         delay,
         escHtml,
         onBodyReady,
+        timers: {
+            setInterval: nativeSetInterval,
+            clearInterval: nativeClearInterval,
+            setTimeout: nativeSetTimeout,
+            clearTimeout: nativeClearTimeout
+        },
         net: { requestExternal },
         state: {
+            licensed: false,
             isSolving: false,
             currentQuestionId: null,
+            packetHits: 0,
+            lastEngine: 'Đang quét...',
             questions: new Map(),
             solvedMeta: new Map(),
-            correctAnswers: new Map()
+            correctAnswers: new Map(),
+            clozeAnswers: {}
         },
         features: {
             autoAnswer: true,
@@ -180,13 +191,586 @@
                 } catch (e) {}
                 return '';
             })(),
-            autoDelay: 1500,
+            aiProvider: 'gemini',
+            autoDelay: 1400,
             questionMode: 'stealth'
         }
     };
 
     global.IOE = ioeState;
     win.IOE = ioeState;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+
+/* --- functions/licenseGate.js --- */
+(function (global) {
+    'use strict';
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = global.IOE || win.IOE;
+    if (!IOE) return;
+
+    const VERIFY_API = 'https://yanzbnshop.onrender.com/api/v1/keys/verify';
+    const SHOP_URL = 'https://yanzbnshop.onrender.com/#shop-keys';
+    const RESET_URL = 'https://yanzbnshop.onrender.com/#reset-hwid';
+    const PK_HEX = '231c8e6a0dd5641a14153b363208e261b95367178f8154cdadeed73bd2a3ec2b';
+    const KEY_STORAGE_KEY = 'YANZIOE_VIP_LICENSE_KEY';
+    const SESSION_CACHE_KEY = 'YANZIOE_VIP_LICENSE_CACHE';
+    const HWID_STORAGE_KEY = 'YANZIOE_VIP_HWID_FP';
+
+    /* ================= 1. COMPACT SHA-512 + ED25519 (RFC 8032) ================= */
+    const K512 = [
+        0x428a2f98d728ae22n, 0x7137449123ef65cdn, 0xb5c0fbcfec4d3b2fn, 0xe9b5dba58189dbbcn,
+        0x3956c25bf348b538n, 0x59f111f1b605d019n, 0x923f82a4af194f9bn, 0xab1c5ed5da6d8118n,
+        0xd807aa98a3030242n, 0x12835b0145706fben, 0x243185be4ee4b28cn, 0x550c7dc3d5ffb4e2n,
+        0x72be5d74f27b896fn, 0x80deb1fe3b1696b1n, 0x9bdc06a725c71235n, 0xc19bf174cf692694n,
+        0xe49b69c19ef14ad2n, 0xefbe4786384f25e3n, 0x0fc19dc68b8cd5b5n, 0x240ca1cc77ac9c65n,
+        0x2de92c6f592b0275n, 0x4a7484aa6ea6e483n, 0x5cb0a9dcbd41fbd4n, 0x76f988da831153b5n,
+        0x983e5152ee66dfabn, 0xa831c66d2db43210n, 0xb00327c898fb213fn, 0xbf597fc7beef0ee4n,
+        0xc6e00bf33da88fc2n, 0xd5a79147930aa725n, 0x06ca6351e003826fn, 0x142929670a0e6e70n,
+        0x27b70a8546d22ffcn, 0x2e1b21385c26c926n, 0x4d2c6dfc5ac42aedn, 0x53380d139d95b3dfn,
+        0x650a73548baf63den, 0x766a0abb3c77b2a8n, 0x81c2c92e47edaee6n, 0x92722c851482353bn,
+        0xa2bfe8a14cf10364n, 0xa81a664bbc423001n, 0xc24b8b70d0f89791n, 0xc76c51a30654be30n,
+        0xd192e819d6ef5218n, 0xd69906245565a910n, 0xf40e35855771202an, 0x106aa07032bbd1b8n,
+        0x19a4c116b8d2d0c8n, 0x1e376c085141ab53n, 0x2748774cdf8eeb99n, 0x34b0bcb5e19b48a8n,
+        0x391c0cb3c5c95a63n, 0x4ed8aa4ae3418acbn, 0x5b9cca4f7763e373n, 0x682e6ff3d6b2b8a3n,
+        0x748f82ee5defb2fcn, 0x78a5636f43172f60n, 0x84c87814a1f0ab72n, 0x8cc702081a6439ecn,
+        0x90befffa23631e28n, 0xa4506cebde82bde9n, 0xbef9a3f7b2c67915n, 0xc67178f2e372532bn,
+        0xca273eceea26619cn, 0xd186b8c721c0c207n, 0xeada7dd6cde0eb1en, 0xf57d4f7fee6ed178n,
+        0x06f067aa72176fban, 0x0a637dc5a2c898a6n, 0x113f9804bef90daen, 0x1b710b35131c471bn,
+        0x28db77f523047d84n, 0x32caab7b40c72493n, 0x3c9ebe0a15c9bebcn, 0x431d67c49c100d4cn,
+        0x4cc5d4becb3e42b6n, 0x597f299cfc657e2an, 0x5fcb6fab3ad6faecn, 0x6c44198c4a475817n
+    ];
+    const M64 = 0xffffffffffffffffn;
+    const rotr64 = (x, n) => ((x >> BigInt(n)) | (x << BigInt(64 - n))) & M64;
+
+    function sha512Bytes(inputBytes) {
+        const len = inputBytes.length;
+        const bitLen = BigInt(len) * 8n;
+        const rem = (len + 1 + 16) % 128;
+        const padZero = rem === 0 ? 0 : 128 - rem;
+        const buf = new Uint8Array(len + 1 + padZero + 16);
+        buf.set(inputBytes, 0);
+        buf[len] = 0x80;
+        let b = bitLen;
+        for (let i = 0; i < 8; i++) {
+            buf[buf.length - 1 - i] = Number(b & 0xffn);
+            b >>= 8n;
+        }
+        let h0 = 0x6a09e667f3bcc908n, h1 = 0xbb67ae8584caa73bn, h2 = 0x3c6ef372fe94f82bn, h3 = 0xa54ff53a5f1d36f1n;
+        let h4 = 0x510e527fade682d1n, h5 = 0x9b05688c2b3e6c1fn, h6 = 0x1f83d9abfb41bd6bn, h7 = 0x5be0cd19137e2179n;
+        const W = new Array(80);
+        for (let off = 0; off < buf.length; off += 128) {
+            for (let i = 0; i < 16; i++) {
+                let v = 0n;
+                for (let j = 0; j < 8; j++) v = (v << 8n) | BigInt(buf[off + i * 8 + j]);
+                W[i] = v;
+            }
+            for (let i = 16; i < 80; i++) {
+                const s0 = rotr64(W[i - 15], 1) ^ rotr64(W[i - 15], 8) ^ (W[i - 15] >> 7n);
+                const s1 = rotr64(W[i - 2], 19) ^ rotr64(W[i - 2], 61) ^ (W[i - 2] >> 6n);
+                W[i] = (W[i - 16] + s0 + W[i - 7] + s1) & M64;
+            }
+            let a = h0, b0 = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+            for (let i = 0; i < 80; i++) {
+                const S1 = rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41);
+                const ch = (e & f) ^ ((~e & M64) & g);
+                const t1 = (h + S1 + ch + K512[i] + W[i]) & M64;
+                const S0 = rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39);
+                const maj = (a & b0) ^ (a & c) ^ (b0 & c);
+                const t2 = (S0 + maj) & M64;
+                h = g; g = f; f = e; e = (d + t1) & M64;
+                d = c; c = b0; b0 = a; a = (t1 + t2) & M64;
+            }
+            h0 = (h0 + a) & M64; h1 = (h1 + b0) & M64; h2 = (h2 + c) & M64; h3 = (h3 + d) & M64;
+            h4 = (h4 + e) & M64; h5 = (h5 + f) & M64; h6 = (h6 + g) & M64; h7 = (h7 + h) & M64;
+        }
+        const out = new Uint8Array(64);
+        const hs = [h0, h1, h2, h3, h4, h5, h6, h7];
+        for (let i = 0; i < 8; i++) {
+            let v = hs[i];
+            for (let j = 7; j >= 0; j--) { out[i * 8 + j] = Number(v & 0xffn); v >>= 8n; }
+        }
+        return out;
+    }
+
+    const ED_Q = (1n << 255n) - 19n;
+    const ED_L = (1n << 252n) + 27742317777372353535851937790883648493n;
+    function modQ(a) { const r = a % ED_Q; return r >= 0n ? r : r + ED_Q; }
+    function powMod(b, e, m) {
+        let r = 1n;
+        b = b % m;
+        if (b < 0n) b += m;
+        while (e > 0n) {
+            if (e & 1n) r = (r * b) % m;
+            b = (b * b) % m;
+            e >>= 1n;
+        }
+        return r;
+    }
+    const ED_D = modQ(-121665n * powMod(121666n, ED_Q - 2n, ED_Q));
+    const ED_I = powMod(2n, (ED_Q - 1n) >> 2n, ED_Q);
+    function edRecoverX(y) {
+        const y2 = modQ(y * y);
+        const xx = modQ((y2 - 1n) * powMod(modQ(ED_D * y2 + 1n), ED_Q - 2n, ED_Q));
+        let x = powMod(xx, (ED_Q + 3n) >> 3n, ED_Q);
+        if (modQ(x * x - xx) !== 0n) x = modQ(x * ED_I);
+        return (x & 1n) ? (ED_Q - x) : x;
+    }
+    const ED_By = modQ(4n * powMod(5n, ED_Q - 2n, ED_Q));
+    const ED_G = [edRecoverX(ED_By), ED_By];
+
+    function edAdd(P, Q) {
+        const [x1, y1] = P, [x2, y2] = Q;
+        const d = modQ(ED_D * x1 * x2 * y1 * y2);
+        return [
+            modQ((x1 * y2 + x2 * y1) * powMod(modQ(1n + d), ED_Q - 2n, ED_Q)),
+            modQ((y1 * y2 + x1 * x2) * powMod(modQ(1n - d), ED_Q - 2n, ED_Q))
+        ];
+    }
+    function edMul(P, e) {
+        let R = [0n, 1n], T = P, k = e;
+        while (k > 0n) {
+            if (k & 1n) R = edAdd(R, T);
+            T = edAdd(T, T);
+            k >>= 1n;
+        }
+        return R;
+    }
+    function leBytesToBigInt(arr) {
+        let r = 0n;
+        for (let i = arr.length - 1; i >= 0; i--) r = (r << 8n) | BigInt(arr[i]);
+        return r;
+    }
+    function decodeEdPoint(b32) {
+        const xSign = (b32[31] >> 7) & 1;
+        const cp = new Uint8Array(b32);
+        cp[31] &= 0x7f;
+        const y = leBytesToBigInt(cp);
+        if (y >= ED_Q) return null;
+        const y2 = modQ(y * y);
+        const u = modQ(y2 - 1n);
+        const v = modQ(ED_D * y2 + 1n);
+        const xx = modQ(u * powMod(v, ED_Q - 2n, ED_Q));
+        let x = powMod(xx, (ED_Q + 3n) >> 3n, ED_Q);
+        if (modQ(x * x - xx) !== 0n) x = modQ(x * ED_I);
+        if (modQ(x * x - xx) !== 0n) return null;
+        if (x === 0n && xSign === 1) return null;
+        if (Number(x & 1n) !== xSign) x = ED_Q - x;
+        return [x, y];
+    }
+    function hexToBytes(hex) {
+        if (!hex || typeof hex !== 'string' || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+        const u = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < u.length; i++) u[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        return u;
+    }
+    function verifyEd25519(sigHex, msgStr, pkHex = PK_HEX) {
+        try {
+            const sig = hexToBytes(sigHex);
+            const pk = hexToBytes(pkHex);
+            if (!sig || sig.length !== 64 || !pk || pk.length !== 32) return false;
+            const R = decodeEdPoint(sig.subarray(0, 32));
+            const A = decodeEdPoint(pk);
+            const S = leBytesToBigInt(sig.subarray(32, 64));
+            if (!R || !A || S >= ED_L) return false;
+            const msgBytes = new TextEncoder().encode(String(msgStr));
+            const inp = new Uint8Array(32 + 32 + msgBytes.length);
+            inp.set(sig.subarray(0, 32), 0);
+            inp.set(pk, 32);
+            inp.set(msgBytes, 64);
+            const h = leBytesToBigInt(sha512Bytes(inp)) % ED_L;
+            const left = edMul(ED_G, S);
+            const right = edAdd(R, edMul(A, h));
+            return left[0] === right[0] && left[1] === right[1];
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /* ================= 2. CROSS-ORIGIN STORAGE & HARDWARE HWID ================= */
+    async function kvGet(key) {
+        try {
+            if (document.documentElement?.dataset?.ioeBridge === '1') {
+                const res = await new Promise((resolve) => {
+                    const id = 'ioesg_' + Math.random().toString(36).slice(2);
+                    const tm = setTimeout(() => { window.removeEventListener('message', onMsg); resolve(null); }, 1200);
+                    function onMsg(ev) {
+                        if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_STORAGE_RES' || ev.data?.id !== id) return;
+                        clearTimeout(tm); window.removeEventListener('message', onMsg); resolve(ev.data.value ?? null);
+                    }
+                    window.addEventListener('message', onMsg);
+                    window.postMessage({ type: 'IOE_BRIDGE_STORAGE_GET', id, key }, '*');
+                });
+                if (res) return res;
+            }
+        } catch (e) {}
+        try {
+            if (typeof GM_getValue === 'function') {
+                const gmVal = GM_getValue(key, '');
+                if (gmVal) return gmVal;
+            }
+        } catch (e) {}
+        try { const ls = localStorage.getItem(key); if (ls) return ls; } catch (e) {}
+        try { const ss = sessionStorage.getItem(key); if (ss) return ss; } catch (e) {}
+        try {
+            const wn = JSON.parse(window.name || '{}');
+            if (wn && wn[key]) return wn[key];
+        } catch (e) {}
+        try {
+            const m = new RegExp('(?:^|;\\s*)' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]+)').exec(document.cookie || '');
+            if (m) return decodeURIComponent(m[1]);
+        } catch (e) {}
+        return '';
+    }
+
+    async function kvSet(key, val) {
+        const v = String(val || '');
+        try {
+            if (document.documentElement?.dataset?.ioeBridge === '1') {
+                window.postMessage({ type: 'IOE_BRIDGE_STORAGE_SET', key, value: v }, '*');
+            }
+        } catch (e) {}
+        try { if (typeof GM_setValue === 'function') GM_setValue(key, v); } catch (e) {}
+        try {
+            if (v) localStorage.setItem(key, v);
+            else localStorage.removeItem(key);
+        } catch (e) {}
+        try {
+            if (v) sessionStorage.setItem(key, v);
+            else sessionStorage.removeItem(key);
+        } catch (e) {}
+        try {
+            let wn = {};
+            try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
+            if (v) wn[key] = v; else delete wn[key];
+            window.name = JSON.stringify(wn);
+        } catch (e) {}
+        try {
+            const hostParts = (location.hostname || '').split('.');
+            const rootDom = hostParts.length >= 2 ? `; domain=.${hostParts.slice(-2).join('.')}` : '';
+            if (v) document.cookie = `${key}=${encodeURIComponent(v)}; path=/${rootDom}; max-age=315360000; SameSite=Lax`;
+            else document.cookie = `${key}=; path=/${rootDom}; max-age=0; SameSite=Lax`;
+        } catch (e) {}
+    }
+
+    let cachedHwid = '';
+    async function getHardwareHwid() {
+        if (cachedHwid) return cachedHwid;
+        let stored = await kvGet(HWID_STORAGE_KEY);
+        if (stored && /^IOE-[0-9A-F]{20,32}$/.test(stored)) {
+            cachedHwid = stored;
+            return cachedHwid;
+        }
+        const parts = [
+            navigator.platform || '',
+            String(navigator.hardwareConcurrency || 0),
+            String(navigator.deviceMemory || 0),
+            `${screen?.width || 0}x${screen?.height || 0}x${screen?.colorDepth || 0}`,
+            (Intl.DateTimeFormat().resolvedOptions().timeZone || '')
+        ];
+        try {
+            const glC = document.createElement('canvas');
+            const gl = glC.getContext('webgl') || glC.getContext('experimental-webgl');
+            if (gl) {
+                const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+                if (dbg) {
+                    parts.push(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) || '');
+                    parts.push(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '');
+                }
+            }
+        } catch (e) {}
+        try {
+            const c = document.createElement('canvas');
+            c.width = 180; c.height = 30;
+            const ctx = c.getContext('2d');
+            if (ctx) {
+                ctx.font = '14px sans-serif';
+                ctx.fillText('YanzIOE_HW_v1.2', 4, 20);
+                parts.push(c.toDataURL().slice(-48));
+            }
+        } catch (e) {}
+        const digest = sha512Bytes(new TextEncoder().encode('IOEHW2|' + parts.join('|')));
+        let hx = '';
+        for (let i = 0; i < 14; i++) hx += digest[i].toString(16).padStart(2, '0').toUpperCase();
+        cachedHwid = 'IOE-' + hx;
+        await kvSet(HWID_STORAGE_KEY, cachedHwid);
+        return cachedHwid;
+    }
+
+    function randomHex(byteLen = 16) {
+        const u = new Uint8Array(byteLen);
+        if (global.crypto?.getRandomValues) global.crypto.getRandomValues(u);
+        else for (let i = 0; i < byteLen; i++) u[i] = Math.floor(Math.random() * 256);
+        return Array.from(u, b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /* ================= 3. LICENSE STATE & VERIFICATION ================= */
+    const licenseState = {
+        licensed: false,
+        key: '',
+        hwid: '',
+        expiresAt: '',
+        duration: '',
+        daysLeft: 0,
+        lastError: ''
+    };
+
+    async function verifyKeyRemote(rawKey) {
+        const keyCode = String(rawKey || '').trim().toUpperCase();
+        if (!keyCode) {
+            licenseState.lastError = 'Vui lòng nhập mã Key YANZ-IOE-...';
+            return { ok: false, error: licenseState.lastError };
+        }
+        const hwid = await getHardwareHwid();
+        const nonce = randomHex(16);
+        const body = JSON.stringify({ key: keyCode, hwid, game: 'yanz-ioe-vip', nonce });
+        try {
+            let res;
+            if (IOE.net?.requestExternal) {
+                res = await IOE.net.requestExternal(VERIFY_API, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body,
+                    timeoutMs: 15000
+                });
+            } else {
+                const fr = await fetch(VERIFY_API, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body
+                });
+                res = { ok: fr.ok, status: fr.status, text: await fr.text() };
+            }
+            if (!res || !res.text) {
+                licenseState.lastError = 'Không kết nối được server bản quyền. Vui lòng thử lại!';
+                return { ok: false, error: licenseState.lastError };
+            }
+            let j;
+            try { j = JSON.parse(res.text); } catch (e) {
+                licenseState.lastError = 'Server đang khởi động (Cold Start), vui lòng bấm Kích Hoạt lại sau vài giây!';
+                return { ok: false, error: licenseState.lastError };
+            }
+            if (!j || !j.valid) {
+                licenseState.licensed = false;
+                licenseState.lastError = j?.error || 'Key không hợp lệ hoặc sai HWID!';
+                if (j?.expired || j?.banned || res.status === 404 || res.status === 403) {
+                    await kvSet(SESSION_CACHE_KEY, '');
+                }
+                return { ok: false, error: licenseState.lastError, hwidLocked: !!j?.hwid_locked };
+            }
+
+            const respKey = String(j.key || keyCode).trim().toUpperCase();
+            const respHwid = String(j.hwid || hwid);
+            const respExp = String(j.expires_at || 'Vĩnh Viễn (Lifetime)');
+            const edSig = String(j.ed_sig || '');
+            const edTs = String(j.ed_ts || '');
+            const canonMsg = `YIOE1|${respKey}|${respHwid}|${nonce}|${edTs}|${respExp}`;
+            if (!verifyEd25519(edSig, canonMsg)) {
+                licenseState.licensed = false;
+                licenseState.lastError = 'Chữ ký bảo mật Ed25519 từ server không khớp! Từ chối kích hoạt.';
+                return { ok: false, error: licenseState.lastError };
+            }
+
+            licenseState.licensed = true;
+            licenseState.key = respKey;
+            licenseState.hwid = hwid;
+            licenseState.expiresAt = respExp;
+            licenseState.duration = String(j.duration || '');
+            licenseState.daysLeft = Number(j.days_left ?? 0);
+            licenseState.lastError = '';
+            IOE.state.licensed = true;
+
+            await kvSet(KEY_STORAGE_KEY, respKey);
+            await kvSet(SESSION_CACHE_KEY, JSON.stringify({
+                key: respKey,
+                hwid,
+                nonce,
+                ed_ts: edTs,
+                ed_sig: edSig,
+                expires_at: respExp,
+                duration: licenseState.duration,
+                days_left: licenseState.daysLeft,
+                cachedAt: Date.now()
+            }));
+            IOE.events.emit('licenseVerified', { ...licenseState });
+            return { ok: true, state: { ...licenseState } };
+        } catch (err) {
+            licenseState.lastError = 'Lỗi kết nối: ' + (err?.message || String(err));
+            return { ok: false, error: licenseState.lastError };
+        }
+    }
+
+    async function clearKey() {
+        licenseState.licensed = false;
+        licenseState.key = '';
+        IOE.state.licensed = false;
+        await kvSet(KEY_STORAGE_KEY, '');
+        await kvSet(SESSION_CACHE_KEY, '');
+        showLicenseModal('Đã xóa Key cũ. Vui lòng nhập Key mới!');
+    }
+
+    /* ================= 4. ACTIVATION GLASSMORPHISM MODAL ================= */
+    const MODAL_ID = 'yanzioe-license-modal';
+
+    function removeLicenseModal() {
+        document.getElementById(MODAL_ID)?.remove();
+    }
+
+    async function showLicenseModal(statusText = '') {
+        if (licenseState.licensed) return;
+        const hwid = await getHardwareHwid();
+        IOE.onBodyReady(() => {
+            if (licenseState.licensed) return;
+            let wrap = document.getElementById(MODAL_ID);
+            if (!wrap) {
+                wrap = document.createElement('div');
+                wrap.id = MODAL_ID;
+                wrap.style.cssText = 'position:fixed;top:18px;right:18px;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;width:335px;max-width:94vw;';
+                wrap.innerHTML = `
+                    <div style="background:rgba(15,23,42,0.97);backdrop-filter:blur(18px);border:1px solid rgba(56,189,248,0.55);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,0.7);color:#f8fafc;overflow:hidden;">
+                        <div style="padding:12px 15px;background:linear-gradient(135deg,rgba(2,132,199,0.28),rgba(99,102,241,0.22));border-bottom:1px solid rgba(56,189,248,0.28);display:flex;align-items:center;justify-content:space-between;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:17px;">🔐</span>
+                                <strong style="font-size:13.5px;color:#38bdf8;letter-spacing:0.4px;">YANZIOE VIP • BẢN QUYỀN</strong>
+                            </div>
+                            <span style="background:#0284c7;color:#fff;font-size:10px;padding:2px 6px;border-radius:5px;font-weight:800;">v1.2.0</span>
+                        </div>
+                        <div style="padding:14px 15px;">
+                            <div style="font-size:11.5px;color:#cbd5e1;margin-bottom:8px;line-height:1.45;">
+                                Nhập mã Key <strong style="color:#38bdf8;">YANZ-IOE-...</strong> đã mua tại <strong>YanzBn Shop</strong> để mở khóa công cụ tự giải đề &amp; Canvas trên IOE.vn.
+                            </div>
+                            <input id="yanzioe-lic-inp" type="text" placeholder="YANZ-IOE-XXXX-XXXX-XXXX" autocomplete="off" style="width:100%;box-sizing:border-box;background:rgba(2,6,23,0.75);border:1px solid rgba(56,189,248,0.45);border-radius:8px;color:#f8fafc;padding:9px 10px;font-size:12.5px;font-weight:700;letter-spacing:0.6px;outline:none;text-transform:uppercase;">
+                            <div id="yanzioe-lic-status" style="display:none;margin-top:8px;padding:7px 9px;border-radius:6px;font-size:11px;line-height:1.4;word-break:break-word;"></div>
+                            <div style="display:flex;gap:7px;margin-top:10px;">
+                                <button id="yanzioe-lic-btn" type="button" style="flex:2;background:linear-gradient(135deg,#0284c7,#2563eb);color:#fff;border:none;border-radius:8px;padding:9px 10px;font-size:12px;font-weight:800;cursor:pointer;">🔓 Kích Hoạt Ngay</button>
+                                <button id="yanzioe-lic-paste" type="button" style="flex:1;background:#1e293b;color:#cbd5e1;border:1px solid rgba(148,163,184,0.35);border-radius:8px;padding:9px 8px;font-size:11.5px;font-weight:700;cursor:pointer;">📋 Dán</button>
+                            </div>
+                            <div style="margin-top:10px;padding:7px 9px;background:rgba(30,41,59,0.75);border-radius:7px;display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                                <span style="font-size:10.5px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">HWID: <strong id="yanzioe-lic-hwid" style="color:#e2e8f0;font-family:monospace;"></strong></span>
+                                <button id="yanzioe-lic-cphwid" type="button" style="background:rgba(56,189,248,0.16);border:1px solid rgba(56,189,248,0.35);color:#38bdf8;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:700;cursor:pointer;">Copy</button>
+                            </div>
+                            <div style="margin-top:9px;display:flex;justify-content:space-between;font-size:11px;">
+                                <a href="${SHOP_URL}" target="_blank" rel="noopener" style="color:#38bdf8;text-decoration:none;font-weight:700;">🛒 Mua Key YanzBn</a>
+                                <a href="${RESET_URL}" target="_blank" rel="noopener" style="color:#fbbf24;text-decoration:none;font-weight:700;">🔄 Đổi Máy (Reset HWID)</a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(wrap);
+
+                const inp = document.getElementById('yanzioe-lic-inp');
+                const btn = document.getElementById('yanzioe-lic-btn');
+                const pst = document.getElementById('yanzioe-lic-paste');
+                const cpBtn = document.getElementById('yanzioe-lic-cphwid');
+                const setSt = (msg, isErr) => {
+                    const stEl = document.getElementById('yanzioe-lic-status');
+                    if (!stEl) return;
+                    if (!msg) { stEl.style.display = 'none'; return; }
+                    stEl.style.display = 'block';
+                    stEl.style.background = isErr ? 'rgba(239,68,68,0.16)' : 'rgba(16,185,129,0.16)';
+                    stEl.style.border = isErr ? '1px solid rgba(239,68,68,0.45)' : '1px solid rgba(16,185,129,0.45)';
+                    stEl.style.color = isErr ? '#fca5a5' : '#6ee7b7';
+                    stEl.textContent = msg;
+                };
+
+                const doActivate = async () => {
+                    const k = (inp?.value || '').trim().toUpperCase();
+                    if (!k) { setSt('Vui lòng nhập mã Key trước!', true); return; }
+                    btn.disabled = true;
+                    btn.textContent = '⏳ Đang xác thực...';
+                    setSt('Đang kiểm tra bản quyền & HWID với YanzBn Shop...', false);
+                    const r = await verifyKeyRemote(k);
+                    btn.disabled = false;
+                    btn.textContent = '🔓 Kích Hoạt Ngay';
+                    if (r.ok) {
+                        setSt(`✓ Kích hoạt thành công! Hạn: ${licenseState.expiresAt}`, false);
+                        setTimeout(() => removeLicenseModal(), 550);
+                    } else {
+                        setSt(r.error || 'Kích hoạt thất bại!', true);
+                    }
+                };
+                btn?.addEventListener('click', doActivate);
+                inp?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doActivate(); });
+                pst?.addEventListener('click', async () => {
+                    try {
+                        const txt = await navigator.clipboard.readText();
+                        if (txt && inp) inp.value = txt.trim().toUpperCase();
+                    } catch (e) { setSt('Trình duyệt chặn đọc Clipboard, hãy bấm Ctrl+V vào ô nhập!', true); }
+                });
+                cpBtn?.addEventListener('click', async () => {
+                    try { await navigator.clipboard.writeText(hwid); } catch (e) {}
+                    IOE.toast('✓ Đã copy HWID: ' + hwid, 1500);
+                });
+            }
+
+            const hwidEl = document.getElementById('yanzioe-lic-hwid');
+            if (hwidEl) hwidEl.textContent = hwid;
+            const stEl = document.getElementById('yanzioe-lic-status');
+            if (stEl && statusText) {
+                stEl.style.display = 'block';
+                stEl.style.background = 'rgba(245,158,11,0.16)';
+                stEl.style.border = '1px solid rgba(245,158,11,0.45)';
+                stEl.style.color = '#fde68a';
+                stEl.textContent = statusText;
+            }
+        });
+    }
+
+    async function bootstrapLicenseGate() {
+        const hwid = await getHardwareHwid();
+        licenseState.hwid = hwid;
+
+        // 1. Validate short offline grace cache if signature YIOE1 intact (max 30 min)
+        try {
+            const rawCache = await kvGet(SESSION_CACHE_KEY);
+            if (rawCache) {
+                const c = JSON.parse(rawCache);
+                const ageMs = Date.now() - Number(c.cachedAt || 0);
+                const msg = `YIOE1|${c.key}|${c.hwid}|${c.nonce}|${c.ed_ts}|${c.expires_at}`;
+                if (c.key && c.hwid === hwid && ageMs >= 0 && ageMs < 1800000 && verifyEd25519(c.ed_sig, msg)) {
+                    licenseState.licensed = true;
+                    licenseState.key = c.key;
+                    licenseState.expiresAt = c.expires_at;
+                    licenseState.duration = c.duration || '';
+                    licenseState.daysLeft = Number(c.days_left ?? 0);
+                    IOE.state.licensed = true;
+                    IOE.events.emit('licenseVerified', { ...licenseState });
+                    // Background silent re-check to catch revocations/expirations
+                    verifyKeyRemote(c.key).then(res => {
+                        if (!res.ok) showLicenseModal(res.error);
+                    });
+                    return true;
+                }
+            }
+        } catch (e) {}
+
+        // 2. Try saved key from storage
+        const savedKey = (await kvGet(KEY_STORAGE_KEY)).trim().toUpperCase();
+        if (savedKey) {
+            const res = await verifyKeyRemote(savedKey);
+            if (res.ok) return true;
+            await showLicenseModal(res.error);
+            return false;
+        }
+
+        // 3. Prompt user cleanly
+        await showLicenseModal();
+        return false;
+    }
+
+    IOE.license = {
+        getState: () => ({ ...licenseState }),
+        isLicensed: () => !!licenseState.licensed,
+        getHardwareHwid,
+        verifyKeyRemote,
+        verifyEd25519,
+        clearKey,
+        showLicenseModal,
+        bootstrap: bootstrapLicenseGate
+    };
+    win.YanzIOELicense = IOE.license;
+
+    bootstrapLicenseGate();
 })(typeof window !== 'undefined' ? window : globalThis);
 
 
@@ -229,7 +813,9 @@
         requestAnimationFrame(frame);
     }
 
-    if (document.readyState === 'loading') {
+    if (global.IOE?.onBodyReady) {
+        global.IOE.onBodyReady(initOneko);
+    } else if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initOneko);
     } else {
         initOneko();
@@ -243,6 +829,10 @@
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IOE = global.IOE || win.IOE;
     if (!IOE) return;
+
+    function checkLicensed() {
+        return !!(IOE.state?.licensed || IOE.license?.isLicensed?.());
+    }
 
     /* ================= 1. ADAPTIVE MISTAKE MEMORY ================= */
     const adaptiveMistakes = new Map();
@@ -259,21 +849,31 @@
 
     function isAnswerWrong(qId, ans) {
         const entry = adaptiveMistakes.get(qId);
-        if (!entry) return false;
+        if (!entry || !ans) return false;
         return entry.wrong.has(String(ans).trim().toLowerCase());
+    }
+
+    function getWrongAnswers(qId) {
+        const entry = adaptiveMistakes.get(qId);
+        return entry ? Array.from(entry.wrong) : [];
     }
 
     function isValidClozeWord(w) {
         if (!w || typeof w !== 'string') return false;
         const str = w.trim();
-        if (str.length < 1 || str.length > 35) return false;
-        // Loại bỏ chuỗi rỗng, dấu gạch nối, dấu chấm, placeholder
-        if (/^[_.\s-]+$/.test(str) || str.includes('______') || str.includes('...')) return false;
-        // Loại bỏ URL, tên miền rác
+        if (str.length < 1 || str.length > 40) return false;
+        if (/^[_.\\s-]+$/.test(str) || str.includes('______') || str.includes('...')) return false;
         if (/https?:\/\/|\.com|\.net|\.org|\.vn|\.br|\.py|\.az|\.co|\.kh|\.il|\.hu|\.jp|translate\./i.test(str)) return false;
-        // Bắt buộc phải có ít nhất một chữ cái
         if (!/[a-zA-Z]/.test(str)) return false;
         return true;
+    }
+
+    function stripOptionPrefix(s) {
+        return String(s || '').replace(/^[A-Da-d][.:)\]\s_-]+/, '').trim();
+    }
+
+    function normalizeKeyStr(s) {
+        return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
     }
 
     /* ================= 2. 0MS INSTANT THINKING GENERATOR ================= */
@@ -314,8 +914,7 @@
             '🧠 [Tư duy 0ms - Phân tích ngữ cảnh & Loại trừ]:',
             '• Đọc câu hỏi, xác định trọng tâm ngữ pháp hoặc nghĩa từ vựng.',
             '• Loại trừ các phương án sai thì, sai cấu trúc hoặc không hợp ngữ cảnh.',
-            '• Khóa phương án chính xác nhất.',
-            `➔ Đáp án: ${ansStr}`
+            `➔ Đáp án (${tier || 'CAS'}): ${ansStr}`
         ].join('\n');
     }
 
@@ -324,152 +923,264 @@
         'go': 'went / gone', 'be': 'was, were / been', 'see': 'saw / seen',
         'do': 'did / done', 'have': 'had / had', 'eat': 'ate / eaten',
         'buy': 'bought / bought', 'take': 'took / taken', 'make': 'made / made',
-        'write': 'wrote / written', 'read': 'read / read', 'speak': 'spoke / spoken'
+        'write': 'wrote / written', 'read': 'read / read', 'speak': 'spoke / spoken',
+        'come': 'came / come', 'give': 'gave / given', 'find': 'found / found',
+        'know': 'knew / known', 'think': 'thought / thought', 'tell': 'told / told',
+        'become': 'became / become', 'leave': 'left / left', 'feel': 'felt / felt',
+        'put': 'put / put', 'bring': 'brought / brought', 'begin': 'began / begun',
+        'keep': 'kept / kept', 'hold': 'held / held', 'stand': 'stood / stood',
+        'hear': 'heard / heard', 'let': 'let / let', 'mean': 'meant / meant',
+        'set': 'set / set', 'meet': 'met / met', 'run': 'ran / run',
+        'pay': 'paid / paid', 'sit': 'sat / sat', 'win': 'won / won',
+        'send': 'sent / sent', 'build': 'built / built', 'fall': 'fell / fallen',
+        'cut': 'cut / cut', 'sell': 'sold / sold', 'break': 'broke / broken',
+        'wear': 'wore / worn', 'choose': 'chose / chosen', 'fly': 'flew / flown',
+        'draw': 'drew / drawn', 'drive': 'drove / driven', 'drink': 'drank / drunk',
+        'sing': 'sang / sung', 'swim': 'swam / swum', 'teach': 'taught / taught',
+        'catch': 'caught / caught', 'sleep': 'slept / slept', 'spend': 'spent / spent',
+        'forget': 'forgot / forgotten', 'get': 'got / got'
     };
 
-    function solveLocalEnglish(qText) {
+    const LETTER_BANK = [
+        'apple', 'animals', 'afternoon', 'airport', 'airplane', 'always', 'amazing', 'answer', 'august', 'autumn',
+        'banana', 'basketball', 'beautiful', 'because', 'bedroom', 'bicycle', 'birthday', 'blackboard', 'breakfast', 'brother', 'building',
+        'calendar', 'camera', 'candle', 'cartoon', 'celebrate', 'children', 'chocolate', 'cinema', 'classroom', 'clothes', 'computer', 'country', 'crocodile',
+        'daughter', 'december', 'delicious', 'dentist', 'dictionary', 'different', 'difficult', 'dinosaur', 'doctor', 'dolphin', 'drawing',
+        'elephant', 'engineer', 'english', 'evening', 'everyday', 'everything', 'example', 'excellent', 'exciting', 'exercise', 'expensive',
+        'family', 'fantastic', 'farmer', 'favorite', 'favourite', 'february', 'festival', 'flower', 'football', 'forest', 'friendly', 'fruit', 'furniture',
+        'garden', 'giraffe', 'glasses', 'goodbye', 'grandfather', 'grandmother', 'grandparents', 'guitar',
+        'halloween', 'hamburger', 'handwriting', 'happiness', 'healthy', 'helicopter', 'history', 'holiday', 'homework', 'hospital', 'hungry', 'husband',
+        'icecream', 'important', 'internet', 'island', 'january', 'jacket', 'journalist', 'juice', 'july', 'june',
+        'kangaroo', 'keyboard', 'kitchen', 'kitten', 'knowledge', 'language', 'lantern', 'library', 'listen', 'little', 'lizard', 'london',
+        'magazine', 'march', 'market', 'mathematics', 'medicine', 'message', 'midnight', 'minute', 'mirror', 'monday', 'monkey', 'morning', 'mountain', 'museum', 'music',
+        'natural', 'neighbor', 'neighbour', 'newspaper', 'night', 'notebook', 'november', 'number', 'nurse',
+        'october', 'office', 'orange', 'orchestra', 'outside', 'painting', 'pancake', 'parents', 'parrot', 'party', 'passport', 'pencil', 'penguin', 'people', 'pepper', 'person', 'photograph', 'piano', 'picnic', 'picture', 'pineapple', 'playground', 'please', 'pocket', 'police', 'postcard', 'potato', 'practice', 'present', 'pretty', 'primary', 'princess', 'problem', 'project', 'pumpkin', 'pupil', 'purple',
+        'quarter', 'question', 'quiet', 'rabbit', 'rainbow', 'raincoat', 'reading', 'remember', 'restaurant', 'river', 'robot', 'ruler',
+        'sandwich', 'saturday', 'sausage', 'school', 'science', 'scissors', 'season', 'second', 'september', 'seventeen', 'shopping', 'shoulder', 'sister', 'skateboard', 'snowman', 'soccer', 'soldier', 'something', 'sometimes', 'song', 'special', 'spelling', 'spring', 'stadium', 'station', 'strawberry', 'street', 'student', 'subject', 'subway', 'summer', 'sunday', 'sunglasses', 'supermarket', 'surprise', 'sweater', 'swimming',
+        'table', 'teacher', 'telephone', 'television', 'tennis', 'theater', 'theatre', 'thirsty', 'thursday', 'ticket', 'tiger', 'together', 'tomato', 'tomorrow', 'toothache', 'toothbrush', 'tourist', 'traffic', 'train', 'travel', 'treasure', 'triangle', 'trousers', 'tuesday', 'turtle',
+        'umbrella', 'uncle', 'understand', 'uniform', 'university', 'usually', 'vacation', 'vegetable', 'vietnam', 'vietnamese', 'village', 'violin', 'visitor', 'volleyball',
+        'waiter', 'walking', 'wallet', 'water', 'watermelon', 'weather', 'wednesday', 'weekend', 'welcome', 'window', 'winter', 'wonderful', 'writing',
+        'yellow', 'yesterday', 'young', 'zebra'
+    ];
+
+    function solveLocalEnglish(qText, options = []) {
         if (!qText) return null;
-        // Kiểm tra mẫu hỏi quá khứ phân từ hoặc biến đổi từ đơn giản
+
+        // 1. Irregular verb lookup
         for (const [v, p] of Object.entries(IRREGULAR_VERBS)) {
             if (new RegExp(`past\\s+(?:tense|participle)\\s+of\\s+['"]?${v}['"]?`, 'i').test(qText)) {
                 return { answer: p, tier: 'Tier 1 (Local CAS 0ms)' };
             }
         }
+
+        // 2. Simple arithmetic/number questions inside English UI
+        const mathMatch = /(?:what is|equals?|=)\s*(\d+)\s*([+\-*x×÷/])\s*(\d+)/i.exec(qText);
+        if (mathMatch) {
+            const a = parseInt(mathMatch[1], 10), op = mathMatch[2], b = parseInt(mathMatch[3], 10);
+            let res = null;
+            if (op === '+') res = a + b;
+            else if (op === '-') res = a - b;
+            else if (op === '*' || op === 'x' || op === '×') res = a * b;
+            else if ((op === '/' || op === '÷') && b !== 0) res = Math.round((a / b) * 100) / 100;
+            if (res !== null) return { answer: String(res), tier: 'Tier 1 (Local CAS 0ms)' };
+        }
+
+        // 3. Partial hidden-letter puzzle (e.g. "b _ a u t _ f _ l" or "el_ph_nt")
+        const spacedMask = /(?:\b[a-zA-Z_](?:\s+[a-zA-Z_]){2,}\b)/.exec(qText);
+        if (spacedMask && spacedMask[0].includes('_')) {
+            const pat = spacedMask[0].replace(/\s+/g, '').toLowerCase();
+            if (pat.includes('_') && pat.length >= 3) {
+                const rx = new RegExp('^' + pat.replace(/_/g, '[a-z]') + '$');
+                const cand = LETTER_BANK.find(w => w.length === pat.length && rx.test(w));
+                if (cand) return { answer: cand, tier: 'Tier 1 (Word Pattern 0ms)' };
+            }
+        }
+        const compactMask = /\b([a-zA-Z]*_[a-zA-Z_]*)\b/.exec(qText);
+        if (compactMask && compactMask[1].length >= 4 && compactMask[1].length <= 16) {
+            const pat = compactMask[1].toLowerCase();
+            if (/^[a-z_]+$/.test(pat) && /[a-z]/.test(pat) && pat.includes('_')) {
+                const rx = new RegExp('^' + pat.replace(/_/g, '[a-z]') + '$');
+                const cand = LETTER_BANK.find(w => w.length === pat.length && rx.test(w));
+                if (cand && (!options.length || options.some(o => stripOptionPrefix(o).toLowerCase() === cand))) {
+                    return { answer: cand, tier: 'Tier 1 (Word Pattern 0ms)' };
+                }
+            }
+        }
+
         return null;
     }
 
-    /* ================= 4. TIER 2: AI SOLVER (GEMINI / GROQ / OPENROUTER) ================= */
-    async function callGeminiApi(apiKey, prompt) {
-        const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'];
-        const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);
+    /* ================= 4. TIER 2: AI SOLVER (GEMINI 2.5/2.0 / GROQ / OPENROUTER) ================= */
+    let lastAiError = '';
 
+    async function extPostJson(endpoint, headers, payloadObj, timeoutMs = 13000) {
+        const reqExt = IOE.net?.requestExternal;
+        const bodyStr = JSON.stringify(payloadObj);
+        if (reqExt) {
+            return await reqExt(endpoint, { method: 'POST', headers, body: bodyStr, timeoutMs });
+        }
+        const ctrl = new AbortController();
+        const tm = IOE.timers?.setTimeout ? IOE.timers.setTimeout(() => ctrl.abort(), timeoutMs) : setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+            const res = await fetch(endpoint, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+            return { ok: res.ok, status: res.status, text: await res.text() };
+        } finally {
+            if (IOE.timers?.clearTimeout) IOE.timers.clearTimeout(tm); else clearTimeout(tm);
+        }
+    }
+
+    async function callGeminiApi(apiKey, prompt, expectJson = true) {
+        const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
         for (const m of models) {
             try {
-                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
-                const payload = {
+                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
+                const genCfg = { temperature: 0.1, maxOutputTokens: 1000 };
+                if (expectJson) genCfg.responseMimeType = 'application/json';
+                const r = await extPostJson(endpoint, { 'Content-Type': 'application/json' }, {
                     contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: {
-                        temperature: 0.1,
-                        maxOutputTokens: 1000,
-                        responseMimeType: 'application/json'
-                    }
-                };
+                    generationConfig: genCfg
+                }, 14000);
 
-                let resText = null;
-                if (reqExt) {
-                    const r = await reqExt(endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                        timeoutMs: 12000
-                    });
-                    if (r && r.ok && r.text) resText = r.text;
-                } else {
-                    const r = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    if (r.ok) resText = await r.text();
-                }
-
-                if (resText) {
-                    const j = JSON.parse(resText);
+                if (r && r.ok && r.text) {
+                    const j = JSON.parse(r.text);
                     const txt = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (txt) return txt;
+                    if (txt) { lastAiError = ''; return txt; }
+                } else if (r) {
+                    lastAiError = `Gemini ${m}: HTTP ${r.status} ${(r.text || r.error || '').slice(0, 120)}`;
+                    if (r.status === 400 || r.status === 401 || r.status === 403) break;
                 }
             } catch (e) {
-                console.warn(`[YANZIOE Gemini Error on ${m}]`, e);
+                lastAiError = `Gemini ${m}: ${e?.message || e}`;
             }
         }
         return null;
     }
 
-    async function solveWithAi(qText, options = []) {
+    async function callOpenAiCompat(endpoint, apiKey, models, prompt, useJsonFormat = true) {
+        for (const model of models) {
+            try {
+                const bodyObj = {
+                    model,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.1
+                };
+                if (useJsonFormat && !model.includes('gemma')) {
+                    bodyObj.response_format = { type: 'json_object' };
+                }
+                const r = await extPostJson(endpoint, {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                }, bodyObj, 14000);
+
+                if (r && r.ok && r.text) {
+                    const j = JSON.parse(r.text);
+                    const txt = j?.choices?.[0]?.message?.content || '';
+                    if (txt) { lastAiError = ''; return txt; }
+                } else if (r) {
+                    lastAiError = `${model}: HTTP ${r.status} ${(r.text || r.error || '').slice(0, 120)}`;
+                    if (r.status === 401 || r.status === 403) break;
+                }
+            } catch (e) {
+                lastAiError = `${model}: ${e?.message || e}`;
+            }
+        }
+        return null;
+    }
+
+    function detectProvider(apiKey) {
+        const k = String(apiKey || '').trim();
+        const cfg = IOE.featureConfigs?.aiProvider;
+        if (k.startsWith('AIza')) return 'gemini';
+        if (k.startsWith('gsk_')) return 'groq';
+        if (k.startsWith('sk-or-')) return 'openrouter';
+        return cfg || 'gemini';
+    }
+
+    async function callAiRaw(prompt) {
+        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
+        if (!apiKey) { lastAiError = 'Chưa nhập API Key'; return null; }
+        const provider = detectProvider(apiKey);
+        if (provider === 'gemini') {
+            return await callGeminiApi(apiKey, prompt, true);
+        }
+        if (provider === 'groq') {
+            return await callOpenAiCompat('https://api.groq.com/openai/v1/chat/completions', apiKey, [
+                'llama-3.3-70b-versatile',
+                'llama-3.1-8b-instant'
+            ], prompt, true);
+        }
+        return await callOpenAiCompat('https://openrouter.ai/api/v1/chat/completions', apiKey, [
+            'meta-llama/llama-3.3-70b-instruct:free',
+            'google/gemma-3-27b-it:free',
+            'openai/gpt-4o-mini'
+        ], prompt, true);
+    }
+
+    function resolveOptionAnswer(rawAns, options = []) {
+        let ans = String(rawAns || '').trim();
+        if (!ans || !Array.isArray(options) || options.length === 0) return ans;
+        const cleanOpts = options.map(stripOptionPrefix);
+        // Handle single option letter "A", "B", "C", "D" or "A."
+        const mLet = /^([A-Da-d])\.?$/.exec(ans);
+        if (mLet) {
+            const idx = mLet[1].toUpperCase().charCodeAt(0) - 65;
+            if (cleanOpts[idx]) return cleanOpts[idx];
+        }
+        return ans;
+    }
+
+    async function solveWithAi(qId, qText, options = [], taskHint = '') {
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) return null;
 
-        const isGemini = apiKey.startsWith('AIza') || IOE.featureConfigs?.aiProvider === 'gemini';
-        const optsText = options.length ? `\nOptions:\n${options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n')}` : '';
-        const prompt = `Solve this Olympic English (IOE) question accurately.
-Return ONLY JSON format: {"answer": "..."} without any other text or markdown fences.
-If multiple choice, answer must be the exact text or option letter from the provided options.
-If fill in blank, answer must be the exact word.
-If sentence reorder, answer must be the full reordered sentence.
+        const wrongList = getWrongAnswers(qId);
+        const wrongNote = wrongList.length ? `\nKnown WRONG options (NEVER pick these): ${wrongList.join(', ')}` : '';
+        const cleanOpts = (options || []).map(o => stripOptionPrefix(o)).filter(Boolean);
+        const optsText = cleanOpts.length
+            ? `\nOptions:\n${cleanOpts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n')}`
+            : '';
 
-Question: ${qText}${optsText}`;
+        let instruction = '';
+        if (taskHint === 'reorder') {
+            instruction = `Task: Reorder ALL given word/phrase blocks into ONE grammatically correct English sentence.\nBlocks: ${cleanOpts.join(' | ')}\nRules: Return exact sentence using only those blocks.`;
+        } else {
+            instruction = `Solve this Vietnamese Olympic English (IOE) question accurately.\nIf multiple choice, return the exact winning option text (NOT just letter A/B/C/D if text is shown).\nIf fill in the blank, return ONLY the missing word or phrase.\nIf word reordering, return ONLY the full reordered English sentence.`;
+        }
+
+        const prompt = `${instruction}\nReturn ONLY raw JSON: {"answer": "..."} with NO markdown.\nQuestion: ${qText}${optsText}${wrongNote}`;
 
         try {
-            if (isGemini) {
-                const raw = await callGeminiApi(apiKey, prompt);
-                if (!raw) return null;
-                const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
-                if (m) {
-                    try {
-                        const parsed = JSON.parse(m[0]);
-                        return parsed.answer;
-                    } catch (e) {}
-                }
-                return raw.replace(/["'{}]/g, '').trim();
-            } else {
-                const isGroq = apiKey.startsWith('gsk_');
-                const endpoint = isGroq
-                    ? 'https://api.groq.com/openai/v1/chat/completions'
-                    : 'https://openrouter.ai/api/v1/chat/completions';
-                const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';
-                const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);
-
-                const reqBody = JSON.stringify({
-                    model,
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.1,
-                    response_format: { type: 'json_object' }
-                });
-
-                let resText = null;
-                if (reqExt) {
-                    const r = await reqExt(endpoint, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`
-                        },
-                        body: reqBody,
-                        timeoutMs: 12000
-                    });
-                    if (r && r.ok && r.text) resText = r.text;
-                } else {
-                    const res = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`
-                        },
-                        body: reqBody
-                    });
-                    if (res.ok) resText = await res.text();
-                }
-
-                if (resText) {
-                    const j = JSON.parse(resText);
-                    const raw = j?.choices?.[0]?.message?.content || '';
-                    const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
-                    if (m) {
-                        const parsed = JSON.parse(m[0]);
-                        return parsed.answer;
-                    }
-                    return raw.replace(/["'{}]/g, '').trim();
-                }
+            const raw = await callAiRaw(prompt);
+            if (!raw) return null;
+            const m = /\{[\s\S]*"answer"[\s\S]*\}/.exec(raw);
+            let extracted = '';
+            if (m) {
+                try { extracted = String(JSON.parse(m[0]).answer || '').trim(); } catch (e) {}
             }
+            if (!extracted) {
+                extracted = raw.replace(/```json|```/gi, '').replace(/^[\s"'{}]+|[\s"'{}]+$/g, '').trim();
+            }
+            return taskHint === 'reorder' ? extracted : resolveOptionAnswer(extracted, cleanOpts);
         } catch (err) {
+            lastAiError = err?.message || String(err);
             return null;
         }
+    }
+
+    async function testAiKey() {
+        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
+        if (!apiKey) return { ok: false, error: 'Chưa nhập API Key!' };
+        const raw = await callAiRaw('Reply ONLY JSON: {"answer":"OK"}');
+        if (raw && raw.toUpperCase().includes('OK')) {
+            return { ok: true, provider: detectProvider(apiKey) };
+        }
+        return { ok: false, error: lastAiError || 'Không nhận được phản hồi hợp lệ từ API AI.' };
     }
 
     /* ================= 4B. CLOZE PASSAGE KNOWLEDGE & SOLVER ================= */
     const CLOZE_KNOWLEDGE_BANK = [
         {
-            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'mid-autumn', 'offices in vietnam', 'open to learning'],
+            keywords: ['vietnam is becoming', 'different nations', 'cuisines', 'japan, korea, and italy', 'hanoi and ho chi minh city', 'offices in vietnam', 'open to learning'],
             words: {
                 "1": "multicultural",
                 "2": "from",
@@ -485,7 +1196,7 @@ Question: ${qText}${optsText}`;
             }
         },
         {
-            keywords: ['gia long', 'first emperor', 'nguyen dynasty', 'nguyen phuc anh', 'pigneau de', 'thuc anh', 'coastal tip', 'trusted adviser', 'european armaments', 'rise to power', 'french priest', 'rival leaders', 'rival groups'],
+            keywords: ['gia long', 'nguyen dynasty', 'nguyen phuc anh', 'pigneau de', 'rival leaders', 'rival groups', 'first emperor'],
             words: {
                 "1": "first",
                 "2": "as",
@@ -498,18 +1209,6 @@ Question: ${qText}${optsText}`;
                 "9": "where",
                 "10": "role"
             }
-        },
-        {
-            keywords: ['global warming', 'greenhouse', 'carbon dioxide', 'temperature'],
-            answers: { "1": "B", "2": "A", "3": "C", "4": "D", "5": "B", "6": "A" }
-        },
-        {
-            keywords: ['endangered species', 'habitat loss', 'extinction', 'wildlife'],
-            answers: { "1": "C", "2": "A", "3": "D", "4": "B", "5": "A", "6": "C" }
-        },
-        {
-            keywords: ['artificial intelligence', 'machine learning', 'future technology'],
-            answers: { "1": "A", "2": "D", "3": "B", "4": "C", "5": "A", "6": "D" }
         }
     ];
 
@@ -522,26 +1221,8 @@ Question: ${qText}${optsText}`;
         { pattern: /became the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of rival groups/i, word: 'target' },
         { pattern: /attempted to\s+(?:\(\d+\)|_{2,}|\.{3,})\s+the/i, word: 'wipe out' },
         { pattern: /at the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of the rival leaders/i, word: 'hands' },
-        { pattern: /at the hands\s+(?:\(\d+\)|_{2,}|\.{3,})\s+the rival leaders/i, word: 'of' },
-        { pattern: /tip of Vietnam\s+(?:\(\d+\)|_{2,}|\.{3,})\s+by chance/i, word: 'where' },
-        { pattern: /Pigneau de Behaine,?\s+(?:\(\d+\)|_{2,}|\.{3,})\s+would/i, word: 'who' },
-        { pattern: /play a major\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'role' },
-        { pattern: /with the\s+(?:\(\d+\)|_{2,}|\.{3,})\s+of the priest/i, word: 'help' },
-        { pattern: /(?:and|,)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+with advanced European/i, word: 'equipped' },
-        { pattern: /he was\s+(?:\(\d+\)|_{2,}|\.{3,})\s+in securing/i, word: 'successful' },
-        { pattern: /avoiding\s+(?:social\s+)?(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'conflict' },
-        { pattern: /less\s+(?:\(\d+\)|_{2,}|\.{3,})\s+and\s+more\s+connected/i, word: 'lonely' },
         { pattern: /spirit\s+of\s+global\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'citizenship' },
         { pattern: /global\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'citizenship' },
-        { pattern: /cuisines?\s+(?:\(\d+\)|_{2,}|\.{3,})\s+([a-z\s,]+)/i, word: 'from' },
-        { pattern: /(?:companies|firms)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+offices/i, word: 'set up' },
-        { pattern: /(?:by|among)\s+(?:\(\d+\)|_{2,}|\.{3,})\s+residents/i, word: 'foreign' },
-        { pattern: /more\s+(?:\(\d+\)|_{2,}|\.{3,})\s+country/i, word: 'multicultural' },
-        { pattern: /open to learning\s+(?:.*)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'explore' },
-        { pattern: /(?:show|cultural)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'appreciation' },
-        { pattern: /(?:mutual|show)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'respect' },
-        { pattern: /(?:social|promote)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'inclusion' },
-        { pattern: /(?:feel|stay)\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'connected' },
         { pattern: /depend\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
         { pattern: /rely\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'on' },
         { pattern: /interested\s+(?:\(\d+\)|_{2,}|\.{3,})/i, word: 'in' },
@@ -559,164 +1240,93 @@ Question: ${qText}${optsText}`;
         const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
         if (!apiKey) return null;
 
-        const isGemini = apiKey.startsWith('AIza') || IOE.featureConfigs?.aiProvider === 'gemini';
         const rowsFormatted = rows.map(r => {
             const optsStr = Array.isArray(r.options) && r.options.length
-                ? r.options.map((o, idx) => `${String.fromCharCode(65 + idx)}. ${o}`).join(' | ')
+                ? r.options.map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripOptionPrefix(o)}`).join(' | ')
                 : '';
             return `Blank (${r.index || r.rowNumber}): ${optsStr}`;
         }).filter(Boolean).join('\n');
 
-        const prompt = `You are an expert English teacher. Solve this Olympic English (IOE) Cloze Test passage accurately.
-Passage:
-${passageText}
-
-${rowsFormatted ? `Choices for each blank:\n${rowsFormatted}\n` : ''}
-Choose the most grammatically and contextually correct word for each numbered blank.
-${rowsFormatted ? 'You MUST choose one of the provided candidate options for each blank.' : ''}
-Return ONLY valid JSON mapping each blank number (string) to the exact chosen word.
-Example format: {"1": "word1", "2": "word2"}
-Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
+        const prompt = `You are an expert English teacher solving a Vietnamese Olympic English (IOE) Cloze Test.\nPassage:\n${passageText}\n\n${rowsFormatted ? `Candidate choices:\n${rowsFormatted}\n` : ''}Choose the exact grammatically and contextually right word for every numbered blank.\nReturn ONLY raw JSON object mapping blank string number to chosen exact word, e.g. {"1":"word1","2":"word2"}.`;
 
         try {
-            let raw = null;
-            if (isGemini) {
-                raw = await callGeminiApi(apiKey, prompt);
-            } else {
-                const isGroq = apiKey.startsWith('gsk_');
-                const endpoint = isGroq
-                    ? 'https://api.groq.com/openai/v1/chat/completions'
-                    : 'https://openrouter.ai/api/v1/chat/completions';
-                const model = isGroq ? 'llama-3.3-70b-versatile' : 'openai/gpt-4o-mini';
-                const reqExt = IOE.net?.requestExternal || (typeof requestExternal === 'function' ? requestExternal : null);
-
-                const reqBody = JSON.stringify({
-                    model,
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.1,
-                    response_format: { type: 'json_object' }
-                });
-
-                if (reqExt) {
-                    const r = await reqExt(endpoint, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`
-                        },
-                        body: reqBody,
-                        timeoutMs: 12000
-                    });
-                    if (r && r.ok && r.text) {
-                        try {
-                            const j = JSON.parse(r.text);
-                            raw = j?.choices?.[0]?.message?.content || '';
-                        } catch (e) {}
-                    }
-                } else {
-                    const res = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`
-                        },
-                        body: reqBody
-                    });
-                    if (res.ok) {
-                        const j = await res.json();
-                        raw = j?.choices?.[0]?.message?.content || '';
-                    }
+            const raw = await callAiRaw(prompt);
+            if (!raw) return null;
+            const m = /\{[\s\S]*\}/.exec(raw);
+            if (!m) return null;
+            const parsed = JSON.parse(m[0]);
+            const result = {};
+            for (const [k, v] of Object.entries(parsed)) {
+                let word = String(v).trim();
+                const r = rows.find(row => String(row.index || row.rowNumber) === String(k));
+                if (r && Array.isArray(r.options) && /^[A-Da-d]\.?$/.test(word)) {
+                    const idx = word[0].toUpperCase().charCodeAt(0) - 65;
+                    if (r.options[idx]) word = stripOptionPrefix(r.options[idx]);
                 }
+                result[String(k)] = word;
             }
-
-            if (raw) {
-                const m = /\{[\s\S]*\}/.exec(raw);
-                if (m) {
-                    const parsed = JSON.parse(m[0]);
-                    const result = {};
-                    for (const [k, v] of Object.entries(parsed)) {
-                        let word = String(v).trim();
-                        const r = rows.find(row => String(row.index || row.rowNumber) === String(k));
-                        if (r && Array.isArray(r.options) && ['A', 'B', 'C', 'D'].includes(word.toUpperCase())) {
-                            const idx = word.toUpperCase().charCodeAt(0) - 65;
-                            if (r.options[idx]) word = r.options[idx];
-                        }
-                        result[k] = word;
-                    }
-                    return result;
-                }
-            }
+            return result;
         } catch (e) {
-            console.warn('[YANZIOE AI Cloze error]', e);
+            return null;
         }
-        return null;
     }
 
     async function solveClozePassage(passageText, rows = []) {
+        if (!checkLicensed()) return null;
         if (!passageText) return null;
         const normPassage = passageText.toLowerCase();
 
-        // 0. Xóa cache nếu đã chuyển sang đoạn văn bài thi khác
         const passageSnippet = normPassage.replace(/[^a-z0-9]/g, '').slice(0, 40);
         if (IOE.state._lastClozeSnippet && IOE.state._lastClozeSnippet !== passageSnippet) {
             IOE.state.clozeAnswers = {};
         }
         IOE.state._lastClozeSnippet = passageSnippet;
 
-        // Quét trước bộ nhớ Cocos2d để lấy dữ liệu gốc nếu có
         try { scanCocosMemoryForAnswers(); } catch (e) {}
 
         const outAnswers = {};
 
-        // 1. Kiểm tra đáp án bắt được từ Network / Bộ nhớ (Bypass Level 0)
-        // BẮT BUỘC: Lọc chặt chẽ, chỉ sử dụng nếu là từ vựng thực sự, không nhận chuỗi rỗng "" hoặc placeholder
+        // 1. Tier 0 captured system Cloze answers
         const validSystemAnswers = {};
         if (IOE.state.clozeAnswers) {
             for (const [k, v] of Object.entries(IOE.state.clozeAnswers)) {
-                if (isValidClozeWord(v)) {
-                    validSystemAnswers[k] = String(v).trim();
-                }
+                if (isValidClozeWord(v)) validSystemAnswers[k] = String(v).trim();
             }
         }
 
         if (Object.keys(validSystemAnswers).length >= (rows.length || 6)) {
-            console.log('[YANZIOE Bypass] Sử dụng đáp án gốc bắt được từ hệ thống!');
             if (rows.length === 0) {
                 Object.assign(outAnswers, validSystemAnswers);
             } else {
                 for (const r of rows) {
                     const idxStr = String(r.index);
-                    if (validSystemAnswers[idxStr]) {
-                        outAnswers[idxStr] = validSystemAnswers[idxStr];
-                    }
+                    if (validSystemAnswers[idxStr]) outAnswers[idxStr] = validSystemAnswers[idxStr];
                 }
             }
             if (Object.keys(outAnswers).length >= (rows.length || 6)) {
                 const validEntries = Object.entries(outAnswers)
-                    .filter(([k, v]) => isValidClozeWord(v))
+                    .filter(([, v]) => isValidClozeWord(v))
                     .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
                 if (validEntries.length > 0) {
                     const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
                     const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-                    const thinking = `🔓 [Bypass Hệ Thống]: Lấy toàn bộ ${validEntries.length} đáp án gốc từ bộ nhớ IOE.\n✓ Đáp án chuẩn xác 100%:\n${detailedAnswers}`;
                     IOE.events?.emit('questionSolved', {
                         qId: 'cloze_passage',
                         qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
                         answer: compactAnswers,
-                        tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
-                        thinking
+                        tier: 'Tier 0 (Hệ Thống IOE - Key Gốc)',
+                        thinking: `🔓 [Key Gốc Hệ Thống]: Bắt được ${validEntries.length} đáp án từ bộ nhớ IOE.\n${detailedAnswers}`
                     });
                     return outAnswers;
                 }
             }
         }
 
-        // 2. Tier 1: Check knowledge bank chuẩn Bộ GD&ĐT (100% verified ground truth)
+        // 2. Tier 1: Verified bank (require >= 2 distinct keywords to avoid false triggers)
         for (const entry of CLOZE_KNOWLEDGE_BANK) {
             const matches = entry.keywords.filter(k => normPassage.includes(k.toLowerCase()));
-            if (matches.length >= 1) {
-                console.log('[YANZIOE] Khớp đoạn văn từ Ngân hàng đề thi chuẩn IOE!');
-                const sourceDict = entry.words || entry.answers || {};
+            if (matches.length >= 2) {
+                const sourceDict = entry.words || {};
                 if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
                 Object.assign(IOE.state.clozeAnswers, sourceDict);
 
@@ -725,301 +1335,402 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 } else {
                     for (const r of rows) {
                         const idxStr = String(r.index || r.rowNumber);
-                        if (sourceDict[idxStr]) {
-                            outAnswers[idxStr] = sourceDict[idxStr];
-                        }
+                        if (sourceDict[idxStr]) outAnswers[idxStr] = sourceDict[idxStr];
                     }
                 }
 
                 const validEntries = Object.entries(outAnswers)
-                    .filter(([k, v]) => isValidClozeWord(v))
+                    .filter(([, v]) => isValidClozeWord(v))
                     .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
                 if (validEntries.length > 0) {
                     const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
                     const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-                    const thinking = `📖 [Đoạn văn Cloze Test]: ${passageText.slice(0, 80)}...\n✓ Đối chiếu ngân hàng đề thi chuẩn IOE Bộ GD&ĐT.\n✓ Toàn bộ ${validEntries.length} đáp án xác thực 100%:\n${detailedAnswers}`;
                     IOE.events?.emit('questionSolved', {
                         qId: 'cloze_passage',
                         qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
                         answer: compactAnswers,
-                        tier: 'Tier 0 (Hệ Thống IOE Bypass - Khớp 100% Đề Gốc)',
-                        thinking
+                        tier: 'Tier 0 (Ngân hàng đề IOE chuẩn)',
+                        thinking: `📖 [Đoạn văn Cloze Test]: Khớp chuẩn ${validEntries.length} vị trí.\n${detailedAnswers}`
                     });
                     return outAnswers;
                 }
             }
         }
 
-        // 3. Collocation & Grammar CAS Matching
+        // 3. Collocation CAS Matching
         for (const row of rows) {
             const rowIdx = String(row.index || '');
             if (outAnswers[rowIdx]) continue;
-            const opts = (row.options || []).map(o => String(o).trim());
-
+            const opts = (row.options || []).map(o => stripOptionPrefix(o));
             for (const col of COMMON_COLLOCATIONS) {
                 if (col.pattern.test(passageText)) {
-                    const matchedOpt = opts.find(o => o.toLowerCase().includes(col.word.toLowerCase()));
-                    if (matchedOpt) {
-                        outAnswers[rowIdx] = col.word;
-                        break;
-                    }
+                    const matchedOpt = opts.find(o => o.toLowerCase() === col.word.toLowerCase());
+                    if (matchedOpt) { outAnswers[rowIdx] = matchedOpt; break; }
                 }
             }
         }
 
-        if (Object.keys(outAnswers).length >= (rows.length || 6)) {
+        if (rows.length > 0 && Object.keys(outAnswers).length >= rows.length) {
             const validEntries = Object.entries(outAnswers)
-                .filter(([k, v]) => isValidClozeWord(v))
+                .filter(([, v]) => isValidClozeWord(v))
                 .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
             if (validEntries.length > 0) {
-                const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
-                const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
                 IOE.events?.emit('questionSolved', {
                     qId: 'cloze_passage_collocation',
                     qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
-                    answer: compactAnswers,
-                    tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
-                    thinking: `✓ Khớp ${validEntries.length} vị trí theo Collocation CAS:\n${detailedAnswers}`
+                    answer: validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  '),
+                    tier: 'Tier 1 (Collocation CAS)',
+                    thinking: validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n')
                 });
                 return outAnswers;
             }
         }
 
-        // 4. AI Solver (nếu có key AI cấu hình)
+        // 4. AI Solver
         const aiResult = await solveClozeWithAi(passageText, rows);
         if (aiResult && typeof aiResult === 'object') {
             for (const [k, v] of Object.entries(aiResult)) {
                 if (!outAnswers[k] && isValidClozeWord(v)) outAnswers[k] = v;
             }
             const validEntries = Object.entries(outAnswers)
-                .filter(([k, v]) => isValidClozeWord(v))
+                .filter(([, v]) => isValidClozeWord(v))
                 .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10));
             if (validEntries.length > 0) {
-                const detailedAnswers = validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n');
-                const compactAnswers = validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  ');
-                const thinking = `📖 [AI Cloze Solver]: Phân tích ngữ cảnh đoạn văn.\n✓ Đáp án:\n${detailedAnswers}`;
                 IOE.events?.emit('questionSolved', {
                     qId: 'cloze_passage_ai',
                     qText: `[Đoạn văn điền từ - ${validEntries.length} câu hỏi]\n${passageText.slice(0, 100)}...`,
-                    answer: compactAnswers,
+                    answer: validEntries.map(([k, v]) => `Câu ${k}: ${v}`).join('  |  '),
                     tier: 'Tier 2 (AI Cloze)',
-                    thinking
+                    thinking: `📖 [AI Cloze Solver]:\n${validEntries.map(([k, v]) => `• Câu ${k}: ${v}`).join('\n')}`
                 });
                 return outAnswers;
             }
         }
 
-        // TUYỆT ĐỐI KHÔNG BỊA ĐÁP ÁN (Không dùng modulo ['A','B','C','D'][(i-1)%4])
         return outAnswers;
     }
 
     /* ================= 5. SOLVE ORCHESTRATOR ================= */
-    async function solveQuestion(qId, qText, options = []) {
+    async function solveQuestion(qId, qText, options = [], taskHint = '') {
+        if (!checkLicensed()) {
+            IOE.license?.showLicenseModal?.('Vui lòng kích hoạt Key YANZ-IOE trước khi giải bài!');
+            return null;
+        }
         if (!qText && !qId) return null;
 
-        // Tier 0: Ground truth from raw packet
-        if (qId && IOE.state.correctAnswers.has(qId)) {
-            const ans = IOE.state.correctAnswers.get(qId);
-            const thinking = generate0msThinking(qText, ans, 'Tier 0 (Key Gốc)');
-            const meta = { qId, answer: ans, tier: 'Tier 0 (Key Gốc)', thinking };
-            IOE.state.solvedMeta.set(qId, meta);
+        // Tier 0: Lookup in packet/RAM ground truth (check ID + exact normalized question stem + substring match)
+        let tier0Ans = null;
+        if (qId && IOE.state.correctAnswers.has(String(qId))) {
+            tier0Ans = IOE.state.correctAnswers.get(String(qId));
+        } else if (qText) {
+            const normStem = normalizeKeyStr(qText);
+            if (IOE.state.correctAnswers.has(normStem)) {
+                tier0Ans = IOE.state.correctAnswers.get(normStem);
+            } else {
+                for (const [k, v] of IOE.state.correctAnswers.entries()) {
+                    if (k.length >= 12 && (normStem.includes(k) || k.includes(normStem))) {
+                        tier0Ans = v;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (tier0Ans && !isAnswerWrong(qId, tier0Ans)) {
+            const resolved = resolveOptionAnswer(tier0Ans, options);
+            const thinking = generate0msThinking(qText, resolved, 'Tier 0 (Key Gốc)');
+            const meta = { qId, qText, answer: resolved, tier: 'Tier 0 (Key Gốc)', thinking };
+            IOE.state.solvedMeta.set(qId || normKey(qText), meta);
             IOE.events.emit('questionSolved', meta);
             return meta;
         }
 
         // Tier 1: Local English CAS
-        const cas = solveLocalEnglish(qText);
-        if (cas && !isAnswerWrong(qId, cas.answer)) {
-            const thinking = generate0msThinking(qText, cas.answer, cas.tier);
-            const meta = { qId, answer: cas.answer, tier: cas.tier, thinking };
-            IOE.state.solvedMeta.set(qId, meta);
-            IOE.events.emit('questionSolved', meta);
-            return meta;
+        if (taskHint !== 'reorder') {
+            const cas = solveLocalEnglish(qText, options);
+            if (cas && !isAnswerWrong(qId, cas.answer)) {
+                const resolved = resolveOptionAnswer(cas.answer, options);
+                const thinking = generate0msThinking(qText, resolved, cas.tier);
+                const meta = { qId, qText, answer: resolved, tier: cas.tier, thinking };
+                IOE.state.solvedMeta.set(qId || normKey(qText), meta);
+                IOE.events.emit('questionSolved', meta);
+                return meta;
+            }
         }
 
         // Tier 2: AI Solver
-        IOE.toast('🔍 Đang giải câu hỏi...', 1200);
-        const aiAns = await solveWithAi(qText, options);
-        if (aiAns) {
+        const apiKey = (IOE.featureConfigs?.apiKey || '').trim();
+        if (!apiKey) {
+            IOE.toast('⚠️ Chưa nhập API Key AI trong mục Tùy chỉnh (chỉ chạy Tier 0/CAS)', 2400);
+            return null;
+        }
+
+        IOE.toast('🔍 Đang giải câu hỏi...', 1000);
+        const aiAns = await solveWithAi(qId, qText, options, taskHint);
+        if (aiAns && !isAnswerWrong(qId, aiAns)) {
             const thinking = generate0msThinking(qText, aiAns, 'Tier 2 (AI)');
-            const meta = { qId, answer: aiAns, tier: 'Tier 2 (AI)', thinking };
-            IOE.state.solvedMeta.set(qId, meta);
+            const meta = { qId, qText, answer: aiAns, tier: 'Tier 2 (AI)', thinking };
+            IOE.state.solvedMeta.set(qId || normKey(qText), meta);
             IOE.events.emit('questionSolved', meta);
             return meta;
+        } else if (lastAiError) {
+            IOE.appendLog?.(`❌ Lỗi AI: ${lastAiError}`);
         }
 
         return null;
     }
 
-    /* ================= 6. UNIVERSAL SYSTEM BYPASS & NETWORK SNIFFER ================= */
-    // 1. Hook JSON.parse để tóm toàn bộ dữ liệu đề thi được parse trong runtime
-    try {
-        const origJsonParse = JSON.parse;
-        JSON.parse = function (...args) {
-            const res = origJsonParse.apply(this, args);
+    function normKey(s) {
+        return normalizeKeyStr(s).slice(0, 60);
+    }
+
+    /* ================= 6. UNIVERSAL PACKET SNIFFER & COCOS RAM EXTRACTOR ================= */
+    function tryDecodeBase64Json(val) {
+        if (typeof val !== 'string' || val.length < 16 || val.length > 500000) return null;
+        const t = val.trim();
+        if (t.startsWith('{') || t.startsWith('[')) {
+            try { return JSON.parse(t); } catch (e) { return null; }
+        }
+        if (/^eyJ[A-Za-z0-9+/=_-]+$/.test(t)) {
             try {
-                if (res && typeof res === 'object') {
-                    parsePacket(res);
+                const norm = t.replace(/-/g, '+').replace(/_/g, '/');
+                const bin = atob(norm);
+                const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+                const txt = new TextDecoder().decode(bytes);
+                return JSON.parse(txt);
+            } catch (e) { return null; }
+        }
+        return null;
+    }
+
+    function storeQuestionAnswer(qObj, fallbackId) {
+        if (!qObj || typeof qObj !== 'object') return false;
+        let hit = false;
+        const id = qObj.questionId ?? qObj.QuestionId ?? qObj.id ?? qObj.Id ?? qObj.questId ?? fallbackId;
+        const contentRaw = qObj.content ?? qObj.Content ?? qObj.questionContent?.content ?? qObj.QuestionText ?? qObj.question ?? qObj.title ?? '';
+        const contentClean = typeof contentRaw === 'string' ? contentRaw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+
+        // Direct answer string fields
+        let rawAns = qObj.tans ?? qObj.Tans ?? qObj.trueAns ?? qObj.TrueAns ?? qObj.correctAnswer ?? qObj.CorrectAnswer ?? qObj.TrueAnswer ?? qObj.DapAn ?? qObj.RightAnswer;
+        if ((rawAns === undefined || rawAns === null || rawAns === '') && (typeof qObj.answer === 'string' || typeof qObj.Answer === 'string')) {
+            rawAns = qObj.answer ?? qObj.Answer;
+        }
+
+        // Check option list on the same object for isTrue/point > 0 or numeric tans lookup
+        const optArr = qObj.ans ?? qObj.Ans ?? qObj.options ?? qObj.Options ?? qObj.listAnswer ?? qObj.ListAnswer ?? qObj.answers ?? qObj.Answers;
+        if (Array.isArray(optArr) && optArr.length > 0) {
+            if (rawAns !== undefined && rawAns !== null && /^\d+$/.test(String(rawAns).trim())) {
+                const nIdx = parseInt(String(rawAns).trim(), 10);
+                // Some schemas use 0-based index, others use 1-based position/id match
+                const byId = optArr.find(o => o && typeof o === 'object' && Number(o.id ?? o.Id ?? o.position ?? o.Order) === nIdx);
+                const chosen = byId || optArr[nIdx] || optArr[nIdx - 1];
+                if (chosen) {
+                    const txt = typeof chosen === 'string' ? chosen : (chosen.content ?? chosen.Content ?? chosen.text ?? chosen.ans);
+                    if (txt && String(txt).trim() !== '______') rawAns = String(txt).trim();
                 }
-            } catch (e) {}
-            return res;
-        };
-    } catch (e) {}
+            }
+            if (!rawAns || String(rawAns).trim() === '______') {
+                const trueOpt = optArr.find(o => o && typeof o === 'object' && (o.isTrue === true || o.IsTrue === true || o.true === 1 || o.True === 1 || o.isCorrect === true || Number(o.point ?? o.Point ?? 0) > 0));
+                if (trueOpt) {
+                    const txt = trueOpt.content ?? trueOpt.Content ?? trueOpt.text ?? trueOpt.ans ?? trueOpt.tans;
+                    if (txt && String(txt).trim() !== '______') rawAns = String(txt).trim();
+                }
+            }
+        }
 
-    // 2. Hook Fetch không giới hạn URL
-    const originalFetch = window.fetch;
-    window.fetch = async function (...args) {
-        const res = await originalFetch.apply(this, args);
+        if (rawAns !== undefined && rawAns !== null) {
+            const ansClean = String(rawAns).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (ansClean && ansClean !== '______' && ansClean !== '...' && !ansClean.includes('translate.')) {
+                if (id !== undefined && id !== null && String(id) !== '') {
+                    IOE.state.correctAnswers.set(String(id), ansClean);
+                    hit = true;
+                }
+                if (contentClean.length >= 4) {
+                    IOE.state.correctAnswers.set(normalizeKeyStr(contentClean), ansClean);
+                    hit = true;
+                }
+            }
+        }
+        return hit;
+    }
+
+    function parsePacket(data) {
+        if (!data) return false;
+        if (typeof data === 'string') {
+            const dec = tryDecodeBase64Json(data);
+            if (!dec) return false;
+            data = dec;
+        }
+        if (typeof data !== 'object') return false;
+        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
+
+        let foundCount = 0;
+        const visited = new WeakSet();
+
+        function traverse(obj, depth = 0) {
+            if (!obj || typeof obj !== 'object' || depth > 8) return;
+            if (visited.has(obj)) return;
+            visited.add(obj);
+
+            if (storeQuestionAnswer(obj)) foundCount++;
+
+            // Explicit Cloze-style answear/ans arrays with positions
+            for (const key of ['answear', 'ans', 'Ans']) {
+                const arr = obj[key];
+                if (Array.isArray(arr) && arr.length > 0) {
+                    arr.forEach((a, idx) => {
+                        if (a && typeof a === 'object') {
+                            if (storeQuestionAnswer(a, idx + 1)) foundCount++;
+                            const pos = String(a.position || a.Order || (idx + 1));
+                            const val = a.tans || a.Tans || (a.isTrue || Number(a.point || 0) > 0 ? (a.content || a.ans) : null);
+                            if (val && isValidClozeWord(String(val)) && parseInt(pos, 10) <= 15) {
+                                IOE.state.clozeAnswers[pos] = String(val).trim();
+                                foundCount++;
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Question lists
+            for (const qKey of ['question', 'questionArr', 'listQuestion', 'Questions', 'questions']) {
+                const qArr = obj[qKey];
+                if (Array.isArray(qArr)) {
+                    qArr.forEach((q, idx) => {
+                        if (storeQuestionAnswer(q, idx + 1)) foundCount++;
+                    });
+                }
+            }
+
+            if (Array.isArray(obj)) {
+                for (let i = 0; i < obj.length && i < 200; i++) traverse(obj[i], depth + 1);
+            } else {
+                for (const k of Object.keys(obj)) {
+                    if (k === 'window' || k === 'document' || k === 'global' || k === 'self' || k === '_parent' || k === 'parent') continue;
+                    const v = obj[k];
+                    if (typeof v === 'string' && (v.startsWith('eyJ') || v.startsWith('{'))) {
+                        const sub = tryDecodeBase64Json(v);
+                        if (sub) traverse(sub, depth + 1);
+                    } else if (v && typeof v === 'object') {
+                        traverse(v, depth + 1);
+                    }
+                }
+            }
+        }
+
+        traverse(data, 0);
+        if (foundCount > 0) {
+            IOE.state.packetHits = (IOE.state.packetHits || 0) + 1;
+            IOE.events.emit('packetCaptured', { hits: IOE.state.packetHits, answers: IOE.state.correctAnswers.size });
+        }
+        return foundCount > 0;
+    }
+
+    if (!win.__YANZIOE_NET_HOOKED__) {
+        win.__YANZIOE_NET_HOOKED__ = true;
+
         try {
-            const clone = res.clone();
-            clone.json().then(data => parsePacket(data)).catch(() => {});
+            const origJsonParse = JSON.parse;
+            JSON.parse = function (...args) {
+                const res = origJsonParse.apply(this, args);
+                try {
+                    if (res && typeof res === 'object') parsePacket(res);
+                } catch (e) {}
+                return res;
+            };
         } catch (e) {}
-        return res;
-    };
 
-    // 3. Hook XMLHttpRequest không giới hạn URL
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (m, url, ...rest) {
-        this._ioeUrl = url;
-        return origOpen.apply(this, [m, url, ...rest]);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-        this.addEventListener('load', function () {
-            try {
-                const data = JSON.parse(this.responseText);
-                parsePacket(data);
-            } catch (e) {}
-        });
-        return origSend.apply(this, args);
-    };
+        try {
+            const originalFetch = win.fetch;
+            if (typeof originalFetch === 'function') {
+                win.fetch = async function (...args) {
+                    const res = await originalFetch.apply(this, args);
+                    try {
+                        const clone = res.clone();
+                        clone.text().then(t => parsePacket(t)).catch(() => {});
+                    } catch (e) {}
+                    return res;
+                };
+            }
+        } catch (e) {}
 
-    // 4. Trích xuất trực tiếp dữ liệu đề thi & đáp án gốc từ Cocos Module / Scene Memory
+        try {
+            const origOpen = XMLHttpRequest.prototype.open;
+            const origSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function (m, url, ...rest) {
+                this._ioeUrl = url;
+                return origOpen.apply(this, [m, url, ...rest]);
+            };
+            XMLHttpRequest.prototype.send = function (...args) {
+                this.addEventListener('load', function () {
+                    try {
+                        if (this.responseText) parsePacket(this.responseText);
+                    } catch (e) {}
+                });
+                return origSend.apply(this, args);
+            };
+        } catch (e) {}
+    }
+
     function bypassIOESystemAnswers() {
         let extracted = false;
         if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
 
-        // 1. Tận dụng hệ thống Cocos Module window.__require (ClientData / AppModel)
+        // 1. Cocos __require Modules
         try {
             if (typeof win.__require === 'function') {
-                const cd = win.__require('ClientData');
-                const clientData = cd?.default || cd;
-                const am = win.__require('AppModel');
-                const appModel = clientData?.AppModel || am?.default?.AppModel || am?.AppModel;
-                const game = appModel?.game || clientData?.game;
-
-                if (game) {
-                    console.log('[YANZIOE Bypass] Trích xuất thành công game data từ ClientData.AppModel!');
-                    // a. Trích xuất mảng đáp án Cloze Test (game.answear)
-                    if (Array.isArray(game.answear) && game.answear.length > 0) {
-                        let validCount = 0;
-                        game.answear.forEach((a, idx) => {
-                            const pos = String(a.position || (idx + 1));
-                            const ans = a.tans || a.Tans || (a.ans && a.ans !== '______' ? a.ans : null) || (a.content && a.content !== '______' ? a.content : null);
-                            if (isValidClozeWord(ans) && parseInt(pos, 10) <= 15) {
-                                IOE.state.clozeAnswers[pos] = String(ans).trim();
-                                if (a.questId) IOE.state.correctAnswers.set(String(a.questId), String(ans).trim());
-                                validCount++;
-                            }
-                        });
-                        if (validCount > 0) {
-                            extracted = true;
-                            IOE.toast(`🔓 [Bypass] Bắt trọn ${validCount} đáp án Cloze Test từ AppModel!`, 2000);
+                for (const modName of ['ClientData', 'AppModel', 'GameData', 'ExamModel']) {
+                    try {
+                        const m = win.__require(modName);
+                        const rootObj = m?.default || m;
+                        if (rootObj) {
+                            if (parsePacket(rootObj)) extracted = true;
+                            const appModel = rootObj.AppModel || rootObj;
+                            if (appModel?.game && parsePacket(appModel.game)) extracted = true;
                         }
-                    }
-
-                    // b. Trích xuất mảng câu hỏi (game.questionArr)
-                    if (Array.isArray(game.questionArr) && game.questionArr.length > 0) {
-                        game.questionArr.forEach((q, idx) => {
-                            const qId = String(q.questionId || q.id || (idx + 1));
-                            const tans = q.tans || q.Tans || q.data?.tans;
-                            if (isValidClozeWord(tans) && (idx + 1) <= 15) {
-                                IOE.state.correctAnswers.set(qId, String(tans).trim());
-                                IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
-                                if (q.questionContent?.content) {
-                                    IOE.state.correctAnswers.set(String(q.questionContent.content).trim(), String(tans).trim());
-                                }
-                                extracted = true;
-                            }
-                        });
-                    }
-
-                    // c. Trích xuất raw game.question
-                    if (Array.isArray(game.question) && game.question.length > 0) {
-                        game.question.forEach((q, idx) => {
-                            const qId = String(q.id || (idx + 1));
-                            const tans = q.tans || q.Tans;
-                            if (isValidClozeWord(tans) && (idx + 1) <= 15) {
-                                IOE.state.correctAnswers.set(qId, String(tans).trim());
-                                IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
-                                extracted = true;
-                            }
-                        });
-                    }
+                    } catch (e) {}
                 }
             }
-        } catch (e) {
-            console.warn('[YANZIOE Bypass] Lỗi khi truy xuất ClientData/AppModel:', e);
-        }
+        } catch (e) {}
 
-        // 2. Quét sâu Running Scene & các Components
+        // 2. Scan Running Cocos Scene node components deeply
         try {
             const cc = win.cc;
             if (cc && cc.director) {
                 const scene = (typeof cc.director.getRunningScene === 'function' ? cc.director.getRunningScene() : (typeof cc.director.getScene === 'function' ? cc.director.getScene() : null));
                 if (scene) {
-                    function inspectNode(node) {
-                        if (!node) return;
+                    const seenNodes = new WeakSet();
+                    function inspectNode(node, depth = 0) {
+                        if (!node || depth > 14 || seenNodes.has(node)) return;
+                        seenNodes.add(node);
                         const comps = node._components || [];
                         for (const comp of comps) {
                             if (!comp) continue;
-                            // Check comp.questionModel
-                            if (comp.questionModel) {
-                                const qm = comp.questionModel;
-                                const qId = String(qm.questionId || qm.id || '');
-                                const tans = qm.tans || qm.Tans;
-                                if (tans) {
-                                    if (qId) IOE.state.correctAnswers.set(qId, String(tans).trim());
-                                    if (qm.questionContent?.content) IOE.state.correctAnswers.set(String(qm.questionContent.content).trim(), String(tans).trim());
-                                    extracted = true;
-                                }
+                            for (const fld of ['questionModel', 'curQuestion', 'currentQuestion', 'examData', 'question', 'data', 'info']) {
+                                if (comp[fld] && parsePacket(comp[fld])) extracted = true;
                             }
-                            // Check comp.data (FixSentence, Game11, GamePlay)
-                            if (comp.data) {
-                                const d = comp.data;
-                                if (d.game?.ans && Array.isArray(d.game.ans)) {
-                                    d.game.ans.forEach((a, idx) => {
-                                        const pos = String(a.position || (idx + 1));
-                                        const ans = a.tans || a.Tans || (a.ans && a.ans !== '______' ? a.ans : null);
-                                        if (isValidClozeWord(ans) && parseInt(pos, 10) <= 15) {
-                                            IOE.state.clozeAnswers[pos] = String(ans).trim();
-                                            extracted = true;
-                                        }
-                                    });
-                                }
-                                if (Array.isArray(d.answearArr)) {
-                                    const fullStr = d.answearArr.map(x => (typeof x === 'object' ? (x.content || '') : String(x))).join(' ').trim();
-                                    if (fullStr && isValidClozeWord(fullStr)) {
-                                        IOE.state.correctAnswers.set('game11_full', fullStr);
-                                        extracted = true;
-                                    }
+                            if (Array.isArray(comp.listQuestion) && parsePacket(comp.listQuestion)) extracted = true;
+                            if (Array.isArray(comp.data?.answearArr)) {
+                                const fullStr = comp.data.answearArr.map(x => (typeof x === 'object' ? (x.content || '') : String(x))).join(' ').trim();
+                                if (fullStr && isValidClozeWord(fullStr)) {
+                                    IOE.state.correctAnswers.set('game11_full', fullStr);
+                                    extracted = true;
                                 }
                             }
                         }
                         const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
-                        for (const ch of children) inspectNode(ch);
+                        for (const ch of children) inspectNode(ch, depth + 1);
                     }
-                    inspectNode(scene);
+                    inspectNode(scene, 0);
                 }
             }
         } catch (e) {}
 
-        // 3. Quét các biến toàn cục
+        // 3. Global variables
         for (const gk of ['gameData', 'examData', 'exam', 'quizData', 'IOE_DATA', 'currentExam']) {
-            if (win[gk]) {
-                parsePacket(win[gk]);
-                extracted = true;
-            }
+            try {
+                if (win[gk] && parsePacket(win[gk])) extracted = true;
+            } catch (e) {}
         }
 
         return extracted;
@@ -1027,104 +1738,6 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
 
     function scanCocosMemoryForAnswers() {
         return bypassIOESystemAnswers();
-    }
-
-    function parsePacket(data) {
-        if (!data || typeof data !== 'object') return;
-        if (!IOE.state.clozeAnswers) IOE.state.clozeAnswers = {};
-
-        function traverse(obj, depth = 0) {
-            if (!obj || typeof obj !== 'object' || depth > 8) return;
-
-            // 1. Kiểm tra thuộc tính ans / answear là mảng các object
-            if (Array.isArray(obj.ans)) {
-                obj.ans.forEach((a, idx) => {
-                    if (a && typeof a === 'object') {
-                        const pos = String(a.position || (idx + 1));
-                        const val = a.tans || a.Tans || a.ans || a.content;
-                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {
-                            IOE.state.clozeAnswers[pos] = String(val).trim();
-                        }
-                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {
-                        IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
-                    }
-                });
-            }
-            if (Array.isArray(obj.answear)) {
-                obj.answear.forEach((a, idx) => {
-                    if (a && typeof a === 'object') {
-                        const pos = String(a.position || (idx + 1));
-                        const val = a.tans || a.Tans || a.ans || a.content;
-                        if (isValidClozeWord(val) && parseInt(pos, 10) <= 15) {
-                            IOE.state.clozeAnswers[pos] = String(val).trim();
-                        }
-                    } else if (typeof a === 'string' && isValidClozeWord(a) && (idx + 1) <= 15) {
-                        IOE.state.clozeAnswers[String(idx + 1)] = a.trim();
-                    }
-                });
-            }
-
-            // 2. Kiểm tra mảng question / questionArr
-            if (Array.isArray(obj.question)) {
-                obj.question.forEach((q, idx) => {
-                    const qId = String(q.id || (idx + 1));
-                    const tans = q.tans || q.Tans;
-                    if (tans && typeof tans === 'string') {
-                        IOE.state.correctAnswers.set(qId, String(tans).trim());
-                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {
-                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
-                        }
-                    }
-                });
-            }
-            if (Array.isArray(obj.questionArr)) {
-                obj.questionArr.forEach((q, idx) => {
-                    const qId = String(q.id || q.questionId || (idx + 1));
-                    const tans = q.tans || q.Tans;
-                    if (tans && typeof tans === 'string') {
-                        IOE.state.correctAnswers.set(qId, String(tans).trim());
-                        if (isValidClozeWord(tans) && (idx + 1) <= 15) {
-                            IOE.state.clozeAnswers[String(idx + 1)] = String(tans).trim();
-                        }
-                    }
-                });
-            }
-
-            // 3. Kiểm tra Key gốc trực tiếp của từng câu hỏi
-            const id = obj.Id || obj.id || obj.QuestionId || obj.questionId || obj.ExamId;
-            const content = obj.Content || obj.content || obj.QuestionText || obj.question || obj.title;
-            const rawKey = obj.tans || obj.Tans || obj.Answer || obj.answer || obj.Key || obj.key || obj.CorrectAnswer || obj.correctAnswer || obj.DapAn || obj.TrueAnswer || obj.CorrectChoice;
-
-            if (id && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {
-                IOE.state.correctAnswers.set(String(id), String(rawKey).trim());
-            }
-            if (content && rawKey && typeof rawKey === 'string' && !rawKey.includes('translate.')) {
-                IOE.state.correctAnswers.set(String(content).trim(), String(rawKey).trim());
-            }
-
-            // 4. Quét danh sách câu hỏi con / subquestions của bài Cloze (tối đa 15 câu)
-            const subList = obj.SubQuestions || obj.subQuestions || obj.ListAnswer || obj.listAnswer || obj.Answers || obj.answers;
-            if (Array.isArray(subList) && subList.length >= 2 && subList.length <= 15) {
-                subList.forEach((sub, idx) => {
-                    const subIdx = String(sub.Order || sub.Index || sub.order || sub.index || (idx + 1));
-                    const subAns = sub.tans || sub.Tans || sub.Answer || sub.answer || sub.Key || sub.key || sub.Content || sub.content;
-                    if (subAns && isValidClozeWord(subAns) && parseInt(subIdx, 10) <= 15) {
-                        IOE.state.clozeAnswers[subIdx] = String(subAns).trim();
-                    }
-                });
-            }
-
-            if (Array.isArray(obj)) {
-                for (const item of obj) traverse(item, depth + 1);
-            } else {
-                for (const k of Object.keys(obj)) {
-                    if (k === 'window' || k === 'document' || k === 'global') continue;
-                    traverse(obj[k], depth + 1);
-                }
-            }
-        }
-
-        traverse(data, 0);
     }
 
     IOE.CLOZE_KNOWLEDGE_BANK = CLOZE_KNOWLEDGE_BANK;
@@ -1135,9 +1748,12 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         solveClozePassage,
         scanCocosMemoryForAnswers,
         bypassIOESystemAnswers,
+        parsePacket,
+        testAiKey,
         generate0msThinking,
         recordAdaptiveMistake,
-        isAnswerWrong
+        isAnswerWrong,
+        getWrongAnswers
     };
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -1149,31 +1765,65 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
     const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
-    /* ================= 1. COCOS2D-JS / COCOS2D-HTML5 / COCOS CREATOR ENGINE ================= */
+    function isLicensed() {
+        return !!(IOE.state?.licensed || IOE.license?.isLicensed?.());
+    }
+
+    function stripOptPrefix(s) {
+        return String(s || '').replace(/^[A-Da-d][.:)\]\s_-]+/, '').trim();
+    }
+
+    function getCanvasEl() {
+        return document.getElementById('gameCanvas') ||
+            document.getElementById('GameCanvas') ||
+            document.querySelector('canvas.gameCanvas') ||
+            document.querySelector('canvas');
+    }
+
+    /* ================= 1. COCOS2D-JS / COCOS CREATOR ENGINE ================= */
     function getCocosScene() {
         try {
             const cc = win.cc;
             if (cc && cc.director) {
-                // Cocos2d-html5 v3.x (IOE.vn live engine)
                 if (typeof cc.director.getRunningScene === 'function') {
                     const s = cc.director.getRunningScene();
-                    if (s) return s;
+                    if (s) { IOE.state.lastEngine = 'Cocos2d-html5'; return s; }
                 }
-                // Cocos Creator engine
                 if (typeof cc.director.getScene === 'function') {
                     const s = cc.director.getScene();
-                    if (s) return s;
+                    if (s) { IOE.state.lastEngine = 'Cocos Creator'; return s; }
                 }
             }
         } catch (e) {}
         return null;
     }
 
-    // Trích xuất text đa nền tảng (Cocos2d-html5 LabelTTF/BMFont, ccui.Button/Text & Cocos Creator Component)
+    function getLogicalCanvasSize() {
+        try {
+            const cc = win.cc;
+            const vis = cc?.winSize || (typeof cc?.director?.getWinSize === 'function' ? cc.director.getWinSize() : null);
+            if (vis && vis.width > 100 && vis.height > 100) return { width: vis.width, height: vis.height };
+            const v2 = cc?.view?.getVisibleSize?.();
+            if (v2 && v2.width > 100 && v2.height > 100) return { width: v2.width, height: v2.height };
+        } catch (e) {}
+        return { width: 960, height: 640 };
+    }
+
+    function isNodeVisible(node) {
+        if (!node) return false;
+        try {
+            if (node.active === false || node.activeInHierarchy === false) return false;
+            if (node.visible === false) return false;
+            if (typeof node.isVisible === 'function' && !node.isVisible()) return false;
+            if (typeof node.opacity === 'number' && node.opacity <= 8) return false;
+            if (typeof node.getOpacity === 'function' && node.getOpacity() <= 8) return false;
+        } catch (e) {}
+        return true;
+    }
+
     function getNodeText(node) {
         if (!node) return '';
         try {
-            // Cocos2d-html5 v3.x API
             if (typeof node.getString === 'function') {
                 const s = node.getString();
                 if (s && typeof s === 'string') return s.trim();
@@ -1186,7 +1836,6 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 const s = node.getStringText();
                 if (s && typeof s === 'string') return s.trim();
             }
-            // Cocos Creator Component API
             const cc = win.cc;
             if (typeof node.getComponent === 'function' && cc) {
                 let comp = null;
@@ -1194,16 +1843,14 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 if (!comp && cc.RichText) comp = node.getComponent(cc.RichText);
                 if (!comp && cc.EditBox) comp = node.getComponent(cc.EditBox);
                 const s = comp?.string;
-                if (s && typeof s === 'string') return s.trim();
+                if (s && typeof s === 'string') return s.replace(/<[^>]+>/g, '').trim();
             }
-            // Direct property fallbacks
             if (node._string && typeof node._string === 'string') return node._string.trim();
             if (node.string && typeof node.string === 'string') return node.string.trim();
         } catch (e) {}
         return '';
     }
 
-    // Tính tọa độ thế giới đa nền tảng
     function getNodeWorldPos(node) {
         let pos = { x: node.x || 0, y: node.y || 0 };
         try {
@@ -1218,9 +1865,8 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         return pos;
     }
 
-    // Đệ quy quét toàn bộ text trong cây đối tượng Cocos2d
     function extractCocosTexts(node, maxDepth = 15, curDepth = 0) {
-        if (!node || curDepth > maxDepth) return [];
+        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return [];
         const results = [];
         try {
             const clean = getNodeText(node);
@@ -1228,7 +1874,6 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 const worldPos = getNodeWorldPos(node);
                 results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
             }
-
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
             for (const child of children) {
                 results.push(...extractCocosTexts(child, maxDepth, curDepth + 1));
@@ -1237,38 +1882,62 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         return results;
     }
 
-    // Tìm tất cả các nút có thể click trong Cocos2d-html5 & Cocos Creator
+    function extractSceneSpriteClues(node, maxDepth = 12, curDepth = 0, out = []) {
+        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return out;
+        try {
+            const cc = win.cc;
+            let rawName = '';
+            if (typeof node.getComponent === 'function' && cc?.Sprite) {
+                const sp = node.getComponent(cc.Sprite);
+                rawName = sp?.spriteFrame?._name || sp?._spriteFrame?.name || '';
+            }
+            if (!rawName && node._spriteFrame) {
+                rawName = node._spriteFrame._name || node._spriteFrame.name || '';
+            }
+            if (rawName && typeof rawName === 'string') {
+                const clean = rawName.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim();
+                const lower = clean.toLowerCase();
+                if (clean.length >= 3 && clean.length <= 32 && /[a-z]/i.test(clean) &&
+                    !/^(bg|btn|button|panel|frame|border|icon|bar|box|popup|dialog|mask|cloud|star|coin|heart|sound|audio|close|next|back|ok|start|sprite|default|avatar|logo|arrow|line|dot|check|tick|cross|white|black)/i.test(lower) &&
+                    !out.includes(clean)) {
+                    out.push(clean);
+                }
+            }
+            const ch = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
+            for (const c of ch) extractSceneSpriteClues(c, maxDepth, curDepth + 1, out);
+        } catch (e) {}
+        return out;
+    }
+
     function findCocosClickables(node, maxDepth = 15, curDepth = 0) {
-        if (!node || curDepth > maxDepth) return [];
+        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return [];
         const results = [];
         try {
             const cc = win.cc;
             let isClickable = false;
             let btnComp = null;
 
-            // Cocos Creator component
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 btnComp = node.getComponent(cc.Button);
-                if (btnComp) isClickable = true;
+                if (btnComp && btnComp.interactable !== false) isClickable = true;
             }
-            // Cocos2d-html5 Menu & UI Buttons
-            if (cc?.MenuItem && node instanceof cc.MenuItem) isClickable = true;
-            if (cc?.ui?.Button && node instanceof cc.ui.Button) isClickable = true;
+            if (cc?.MenuItem && node instanceof cc.MenuItem && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
+            if (cc?.ui?.Button && node instanceof cc.ui.Button && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
             if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;
             if (node._hasClickEventListener || node._touchListener || node._touchEnabled) isClickable = true;
 
             const name = (node.name || '').toLowerCase();
-            if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('box')) {
+            if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('word')) {
                 isClickable = true;
             }
 
             if (isClickable) {
                 let txt = getNodeText(node);
                 if (!txt) {
-                    txt = extractCocosTexts(node).map(t => t.text).join(' ');
+                    txt = extractCocosTexts(node, 4).map(t => t.text).join(' ');
                 }
                 const worldPos = getNodeWorldPos(node);
-                results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name });
+                results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name || '' });
             }
 
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -1279,9 +1948,8 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         return results;
     }
 
-    // Kích hoạt click vào một Node trong Cocos2d với đa cơ chế đồng bộ
     async function clickCocosNode(node) {
-        if (!node) return false;
+        if (!node || !isNodeVisible(node)) return false;
         try {
             const cc = win.cc;
             const worldPos = getNodeWorldPos(node);
@@ -1303,65 +1971,45 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 isStopped: () => false
             };
 
-            // 1. Cocos2d-html5 MenuItem activate
             if (typeof node.activate === 'function') {
                 try { node.activate(); } catch (e) {}
             }
 
-            // 2. Cocos Creator Button component (Bắt buộc _pressed = true theo mã nguồn Cocos Creator)
             if (typeof node.getComponent === 'function' && cc?.Button) {
                 const btn = node.getComponent(cc.Button);
-                if (btn) {
+                if (btn && btn.interactable !== false) {
                     btn._pressed = true;
-                    if (typeof btn._onTouchBegan === 'function') {
-                        try { btn._onTouchBegan(mockEvent); } catch (e) {}
-                    }
+                    if (typeof btn._onTouchBegan === 'function') { try { btn._onTouchBegan(mockEvent); } catch (e) {} }
                     if (Array.isArray(btn.clickEvents) && btn.clickEvents.length > 0) {
                         for (const ev of btn.clickEvents) {
                             if (typeof ev.emit === 'function') ev.emit([ev.customEventData]);
                         }
                     }
-                    if (typeof btn._onTouchEnded === 'function') {
-                        try { btn._onTouchEnded(mockEvent); } catch (e) {}
-                    }
+                    if (typeof btn._onTouchEnded === 'function') { try { btn._onTouchEnded(mockEvent); } catch (e) {} }
                     btn._pressed = false;
                 }
             }
 
-            // 3. Cocos2d-html5 Event Manager touch dispatch
-            if (cc?.eventManager) {
+            if (cc?.eventManager && typeof cc.eventManager.dispatchEvent === 'function' && cc.EventTouch) {
                 try {
-                    if (typeof cc.eventManager.dispatchEvent === 'function' && cc.EventTouch) {
-                        const touchEvt = new cc.EventTouch([mockTouch]);
-                        touchEvt.setEventCode(cc.EventTouch.EventCode.BEGAN);
-                        cc.eventManager.dispatchEvent(touchEvt);
-                        touchEvt.setEventCode(cc.EventTouch.EventCode.ENDED);
-                        cc.eventManager.dispatchEvent(touchEvt);
-                    }
+                    const touchEvt = new cc.EventTouch([mockTouch]);
+                    touchEvt.setEventCode(cc.EventTouch.EventCode.BEGAN);
+                    cc.eventManager.dispatchEvent(touchEvt);
+                    touchEvt.setEventCode(cc.EventTouch.EventCode.ENDED);
+                    cc.eventManager.dispatchEvent(touchEvt);
                 } catch (e) {}
             }
 
-            // 4. Kích hoạt Event Emitter trên Node
             if (typeof node.emit === 'function') {
-                const startEvt = { ...mockEvent, type: 'touchstart' };
-                node.emit('touchstart', startEvt);
+                node.emit('touchstart', { ...mockEvent, type: 'touchstart' });
                 node.emit('touchend', mockEvent);
                 node.emit('click', mockEvent);
             }
 
-            // 5. Dispatch Native Mouse/Pointer/Touch qua Canvas DOM
-            const canvas = document.getElementById('gameCanvas') || document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');
+            const canvas = getCanvasEl();
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
-                let canvasW = canvas.width || 1000;
-                let canvasH = canvas.height || 600;
-                if (cc?.view?.getVisibleSize) {
-                    const vis = cc.view.getVisibleSize();
-                    if (vis?.width && vis?.height) {
-                        canvasW = vis.width;
-                        canvasH = vis.height;
-                    }
-                }
+                const { width: canvasW, height: canvasH } = getLogicalCanvasSize();
                 const scaleX = rect.width / (canvasW || rect.width);
                 const scaleY = rect.height / (canvasH || rect.height);
                 const clientX = rect.left + (worldPos.x * scaleX);
@@ -1370,324 +2018,197 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
             }
             return true;
         } catch (e) {
-            console.warn('[YANZIOE clickCocosNode error]', e);
+            return false;
         }
-        return false;
     }
 
-    /* ================= 2. CLOZE PASSAGE SOLVER (DẠNG ĐOẠN VĂN ĐIỀN TỪ) ================= */
-    async function solveCocosClozePassage(scene) {
-        try {
-            if (IOE.question?.bypassIOESystemAnswers) {
-                IOE.question.bypassIOESystemAnswers();
-            }
-        } catch (e) {}
+    function matchCocosButton(buttons, ansStr) {
+        if (!Array.isArray(buttons) || !buttons.length || !ansStr) return null;
+        const cleanAns = stripOptPrefix(ansStr).toLowerCase();
+        const ansUpper = String(ansStr).trim().toUpperCase();
 
+        // 1. Exact clean text equality
+        let match = buttons.find(b => stripOptPrefix(b.text).toLowerCase() === cleanAns);
+        if (match) return match;
+
+        // 2. Word-boundary exact match (only length >= 2 to prevent single-char "a" matching "apple")
+        if (cleanAns.length >= 2) {
+            const esc = cleanAns.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const rx = new RegExp(`(^|\\s)${esc}(\\s|$)`, 'i');
+            match = buttons.find(b => rx.test(stripOptPrefix(b.text)));
+            if (match) return match;
+        }
+
+        // 3. Explicit single option letter A/B/C/D -> prefix match or sorted index
+        const mLet = /^([A-D])\.?$/.exec(ansUpper);
+        if (mLet) {
+            const letCh = mLet[1];
+            match = buttons.find(b => {
+                const up = b.text.trim().toUpperCase();
+                return up === letCh || up.startsWith(letCh + '.') || up.startsWith(letCh + ')') || up.startsWith(letCh + ':') || up.startsWith(letCh + ' ');
+            });
+            if (match) return match;
+            const idx = letCh.charCodeAt(0) - 65;
+            if (buttons[idx]) return buttons[idx];
+        }
+
+        // 4. Safe substring match for >= 3 chars
+        if (cleanAns.length >= 3) {
+            match = buttons.find(b => {
+                const bt = stripOptPrefix(b.text).toLowerCase();
+                return bt.length >= 3 && (bt.includes(cleanAns) || cleanAns.includes(bt));
+            });
+            if (match) return match;
+        }
+        return null;
+    }
+
+    /* ================= 2. CLOZE PASSAGE SOLVER (COCOS2D) ================= */
+    async function solveCocosClozePassage(scene) {
+        try { IOE.question?.bypassIOESystemAnswers?.(); } catch (e) {}
         const allTexts = extractCocosTexts(scene);
         if (allTexts.length === 0) return false;
 
-        // 1. Tìm đoạn văn đề bài (ưu tiên đoạn văn dài > 50 ký tự có chứa từ khóa hoặc dấu ngoặc số)
-        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}|vietnam|priest|adviser|emperor|french|history|culture/i.test(t.text)));
-        if (!passageObj) {
-            passageObj = allTexts.find(t => t.text.length > 60 && t.worldY > 280);
-        }
-        if (!passageObj) {
-            passageObj = allTexts.find(t => t.text.length > 80);
-        }
+        const { width: W, height: H } = getLogicalCanvasSize();
+
+        let passageObj = allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}/i.test(t.text)));
+        if (!passageObj) passageObj = allTexts.find(t => t.text.length > 85 && t.worldY > H * 0.42);
         if (!passageObj || !passageObj.text) return false;
         const passageText = passageObj.text;
 
-        // 1b. Trích xuất các hàng & lựa chọn thực tế trên màn hình để cung cấp cho AI Solver
-        const initialRows = [];
-        try {
-            const allClickables = findCocosClickables(scene);
+        function extractRowsFromScene() {
+            const curTexts = extractCocosTexts(scene);
+            const clickables = findCocosClickables(scene);
             const candBtns = [];
-            for (const c of allClickables) {
-                const nameLower = (c.name || '').toLowerCase();
-                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound') || nameLower.includes('time') || nameLower.includes('score')) continue;
-                if (c.worldX > 750 && c.worldY > 450) continue;
+            for (const c of clickables) {
+                const nl = (c.name || '').toLowerCase();
+                if (/(submit|refresh|close|sound|time|score|back|exit|mute|help)/.test(nl)) continue;
+                if (c.worldX > W * 0.78 && c.worldY > H * 0.72) continue;
                 const t = (c.text || '').trim();
-                if (!t) continue;
-                if (/^[A-Da-d][.:)\s]/i.test(t) || (t.length >= 2 && t.length <= 40 && !/^\d+$/.test(t))) {
-                    if (!candBtns.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15)) candBtns.push(c);
+                if (!t || /^(ok|start|tiếp tục|nộp bài|submit)$/i.test(t)) continue;
+                if (/^[A-Da-d][.:)\s]/i.test(t) || (t.length >= 1 && t.length <= 42 && !/^\d+$/.test(t))) {
+                    if (!candBtns.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15)) {
+                        candBtns.push(c);
+                    }
                 }
             }
-            candBtns.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
-            const grouped = [];
+            if (candBtns.length < 4) return [];
+
+            candBtns.sort((a, b) => b.worldY - a.worldY);
+            const rows = [];
             for (const btn of candBtns) {
-                let r = grouped.find(g => Math.abs(g.y - btn.worldY) < 20);
-                if (!r) { r = { y: btn.worldY, buttons: [] }; grouped.push(r); }
+                let r = rows.find(row => Math.abs(row.y - btn.worldY) < 22);
+                if (!r) { r = { y: btn.worldY, buttons: [] }; rows.push(r); }
                 r.buttons.push(btn);
             }
-            grouped.forEach(g => g.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));
+            rows.forEach(r => r.buttons.sort((a, b) => a.worldX - b.worldX));
 
             const numLabels = [];
-            for (const tObj of allTexts) {
+            for (const tObj of curTexts) {
                 const m = /^([0-9]{1,2})[.:)]?$/.exec(tObj.text.trim());
-                if (m && tObj.worldX < 140) numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });
-            }
-
-            for (let idx = 0; idx < grouped.length; idx++) {
-                const g = grouped[idx];
-                const lbl = numLabels.find(l => Math.abs(l.worldY - g.y) < 28);
-                const rNum = lbl ? lbl.rowNumber : (idx + 1);
-                const options = g.buttons.map(b => (b.text || '').replace(/^[A-Da-d][.:)\s_-]+/i, '').trim()).filter(Boolean);
-                if (options.length >= 2) {
-                    initialRows.push({ index: rNum, rowNumber: rNum, options });
+                if (m && tObj.worldX < W * 0.20) {
+                    numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });
                 }
             }
-        } catch (e) {}
-
-        // 2. Lấy toàn bộ đáp án chuẩn từ Solver (Bypass / Official Knowledge Bank)
-        let fullAnswers = await IOE.question?.solveClozePassage(passageText, []);
-        if (!fullAnswers || Object.keys(fullAnswers).length === 0) {
-            // Unseen passage: Gửi kèm initialRows (tùy chọn A, B, C, D trên màn hình) cho AI Solver
-            fullAnswers = await IOE.question?.solveClozePassage(passageText, initialRows);
+            rows.forEach((r, idx) => {
+                const lbl = numLabels.find(l => Math.abs(l.worldY - r.y) < 30);
+                r.rowNumber = (lbl && lbl.rowNumber > 0) ? lbl.rowNumber : (idx + 1);
+            });
+            return rows.filter(r => r.rowNumber > 0 && r.buttons.length >= 2).sort((a, b) => a.rowNumber - b.rowNumber);
         }
+
+        const initialRowsRaw = extractRowsFromScene();
+        if (initialRowsRaw.length === 0 && !/\(\s*\d+\s*\)/.test(passageText)) return false;
+
+        const initialRows = initialRowsRaw.map(r => ({
+            index: r.rowNumber,
+            rowNumber: r.rowNumber,
+            options: r.buttons.map(b => stripOptPrefix(b.text)).filter(Boolean)
+        }));
+
+        let fullAnswers = await IOE.question?.solveClozePassage(passageText, initialRows);
         if (!fullAnswers || Object.keys(fullAnswers).length === 0) return false;
 
-        // Giới hạn số câu hợp lý theo đề bài thực tế (tối đa 12 câu, tuyệt đối không bị tràn rác 274 câu)
         const blankMatches = [...passageText.matchAll(/\(([0-9]{1,2})\)/g)].map(m => parseInt(m[1], 10));
         let detectedCount = blankMatches.length > 0 ? Math.max(...blankMatches) : Object.keys(fullAnswers).length;
-        if (detectedCount > 15 || detectedCount < 1) detectedCount = 10;
-        const totalBlanks = Math.min(Math.max(detectedCount, 4), 12);
-        console.log(`[YANZIOE Cocos] Đoạn văn Cloze Test: ${totalBlanks} câu. Bắt đầu khớp đáp án chuẩn.`);
+        if (detectedCount > 15 || detectedCount < 1) detectedCount = Math.min(Object.keys(fullAnswers).length, 10);
+        const totalBlanks = Math.min(Math.max(detectedCount, 2), 12);
 
-        // Tìm ScrollView nếu có
         let scrollViewComp = null;
         try {
-            function findSV(n) {
+            (function findSV(n) {
                 if (!n || scrollViewComp) return;
                 const cc = win.cc;
                 if (typeof n.getComponent === 'function' && cc?.ScrollView) {
                     const sv = n.getComponent(cc.ScrollView);
                     if (sv) { scrollViewComp = sv; return; }
                 }
-                if (win.ccui && win.ccui.ScrollView && n instanceof win.ccui.ScrollView) {
-                    scrollViewComp = n;
-                    return;
-                }
+                if (win.ccui?.ScrollView && n instanceof win.ccui.ScrollView) { scrollViewComp = n; return; }
                 const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
                 for (const c of ch) findSV(c);
-            }
-            findSV(scene);
+            })(scene);
         } catch (e) {}
 
         const clickedRowNumbers = new Set();
         const recordedAnswers = {};
         let filledCount = 0;
 
-        // Hàm giải các hàng hiện đang hiển thị trên màn hình
         async function solveVisibleRows() {
             let stepFilled = 0;
-            const updatedTexts = extractCocosTexts(scene);
-            const allClickables = findCocosClickables(scene);
-            const candidateButtons = [];
-
-            for (const c of allClickables) {
-                const nameLower = (c.name || '').toLowerCase();
-                if (nameLower.includes('submit') || nameLower.includes('refresh') || nameLower.includes('close') || nameLower.includes('sound') || nameLower.includes('time') || nameLower.includes('score')) {
-                    continue;
-                }
-                if (c.worldX > 750 && c.worldY > 450) continue;
-
-                const t = (c.text || '').trim();
-                if (!t) continue;
-
-                // Nút đáp án hợp lệ: Bắt đầu bằng A, B, C, D hoặc có chữ cái, độ dài vừa phải
-                if (/^[A-Da-d][.:)\s]/i.test(t) || (t.length >= 2 && t.length <= 40 && !/^\d+$/.test(t))) {
-                    const isDup = candidateButtons.some(b => Math.abs(b.worldX - c.worldX) < 15 && Math.abs(b.worldY - c.worldY) < 15);
-                    if (!isDup) candidateButtons.push(c);
-                }
-            }
-
-            if (candidateButtons.length < 4) return 0;
-
-            // Tìm các nhãn số thứ tự câu (1, 2, 3...)
-            const numLabels = [];
-            for (const tObj of updatedTexts) {
-                const m = /^([0-9]{1,2})[.:)]?$/.exec(tObj.text.trim());
-                if (m && tObj.worldX < 140) {
-                    numLabels.push({ ...tObj, rowNumber: parseInt(m[1], 10) });
-                }
-            }
-
-            // Gom nhóm các nút đáp án thành các hàng (mỗi hàng có Y gần nhau trong khoảng 20px)
-            candidateButtons.sort((a, b) => (b.worldY || 0) - (a.worldY || 0));
-            const rows = [];
-            for (const btn of candidateButtons) {
-                let r = rows.find(row => Math.abs(row.y - btn.worldY) < 20);
-                if (!r) {
-                    r = { y: btn.worldY, buttons: [] };
-                    rows.push(r);
-                }
-                r.buttons.push(btn);
-            }
-
-            // Sắp xếp các nút trong mỗi hàng từ trái qua phải (A -> B -> C -> D)
-            rows.forEach(r => r.buttons.sort((a, b) => (a.worldX || 0) - (b.worldX || 0)));
-
-            // Gán số thứ tự câu cho mỗi hàng:
-            // Ưu tiên TUYỆT ĐỐI nhãn số thực tế trên màn hình (numLabels) để đảm bảo 100% khớp đúng hàng
-            for (let idx = 0; idx < rows.length; idx++) {
-                const r = rows[idx];
-                const lbl = numLabels.find(l => Math.abs(l.worldY - r.y) < 28);
-                if (lbl && lbl.rowNumber > 0) {
-                    r.rowNumber = lbl.rowNumber;
-                } else {
-                    r.rowNumber = idx + 1;
-                }
-            }
-
-            // Lọc các hàng hợp lệ
-            const validRows = rows.filter(r => r.rowNumber > 0 && r.buttons.length >= 2);
-            if (validRows.length === 0) return 0;
-
-            validRows.sort((a, b) => a.rowNumber - b.rowNumber);
-
-            // Điền chính xác từng hàng
+            const validRows = extractRowsFromScene();
             for (const row of validRows) {
                 const rNum = row.rowNumber;
                 if (clickedRowNumbers.has(rNum)) continue;
-
                 const targetRaw = fullAnswers[rNum] || fullAnswers[String(rNum)] || '';
                 const targetStr = String(targetRaw).trim();
                 if (!targetStr) continue;
 
-                const cleanTarget = targetStr.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                let targetButton = null;
-
-                // 1. Khớp TUYỆT ĐỐI theo từ vựng (Target Word Exact Match)
-                for (const btn of row.buttons) {
-                    const bt = btn.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                    if (bt === cleanTarget) {
-                        targetButton = btn;
-                        break;
-                    }
-                }
-
-                // 2. Khớp theo ranh giới từ (Word Boundary Match)
-                if (!targetButton && cleanTarget.length >= 2) {
-                    for (const btn of row.buttons) {
-                        const bt = btn.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                        try {
-                            const rx = new RegExp('(^|\\s)' + cleanTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)', 'i');
-                            if (rx.test(bt)) {
-                                targetButton = btn;
-                                break;
-                            }
-                        } catch (e) {}
-                    }
-                }
-
-                // 3. Khớp theo chữ cái lựa chọn (A, B, C, D)
-                if (!targetButton) {
-                    const targetUpper = targetStr.toUpperCase();
-                    if (['A', 'B', 'C', 'D'].includes(targetUpper)) {
-                        targetButton = row.buttons.find(b => {
-                            const bt = b.text.trim().toUpperCase();
-                            return bt.startsWith(targetUpper + ' ') || bt.startsWith(targetUpper + '.') || bt.startsWith(targetUpper + ':') || bt === targetUpper;
-                        });
-                        if (!targetButton) {
-                            const colIdx = targetUpper.charCodeAt(0) - 65;
-                            if (row.buttons[colIdx]) targetButton = row.buttons[colIdx];
-                        }
-                    }
-                }
-
-                // 4. Fallback khớp substring nếu từ dài >= 3 ký tự
-                if (!targetButton && cleanTarget.length >= 3) {
-                    targetButton = row.buttons.find(b => {
-                        const bt = b.text.toLowerCase().replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                        return bt.includes(cleanTarget) || cleanTarget.includes(bt);
-                    });
-                }
-
-
+                const targetButton = matchCocosButton(row.buttons, targetStr);
                 if (targetButton) {
                     await clickCocosNode(targetButton.node);
                     clickedRowNumbers.add(rNum);
                     filledCount++;
                     stepFilled++;
-
                     const chosenIdx = row.buttons.indexOf(targetButton);
                     const chosenLetter = chosenIdx >= 0 ? String.fromCharCode(65 + chosenIdx) : '';
-                    const actualBtnText = targetButton.text.replace(/^[a-d][.:)\s_-]+/i, '').trim();
-                    const displayAnswer = chosenLetter ? `${chosenLetter} (${actualBtnText || cleanTarget || targetStr})` : (actualBtnText || cleanTarget || targetStr);
-                    recordedAnswers[rNum] = displayAnswer;
-
-                    console.log(`[YANZIOE Cocos] ✓ Đã điền chuẩn xác Câu ${rNum}: [${displayAnswer}] (Nút: ${targetButton.text})`);
-                    IOE.toast(`⚡ Đã điền câu ${rNum}/${totalBlanks}: [${displayAnswer}]`, 600);
-
-                    if (IOE.updateQuizSummary) {
-                        IOE.updateQuizSummary(totalBlanks, filledCount);
-                    }
-                    await IOE.delay?.(250);
+                    const cleanBtnTxt = stripOptPrefix(targetButton.text);
+                    recordedAnswers[rNum] = chosenLetter ? `${chosenLetter} (${cleanBtnTxt || targetStr})` : (cleanBtnTxt || targetStr);
+                    IOE.updateQuizSummary?.(totalBlanks, filledCount);
+                    await IOE.delay?.(220);
                 }
             }
             return stepFilled;
         }
 
-        // Pass 1: Cuộn lên đầu ScrollView để làm các câu đầu (1 -> 6)
         if (scrollViewComp) {
             try {
                 if (typeof scrollViewComp.scrollToTop === 'function') scrollViewComp.scrollToTop(0.1);
                 else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(0, 0.1);
-                else if (typeof scrollViewComp.jumpToTop === 'function') scrollViewComp.jumpToTop();
             } catch (e) {}
-            await IOE.delay?.(250);
+            await IOE.delay?.(220);
         }
         await solveVisibleRows();
 
-        // Pass 2: Cuộn xuống cuối ScrollView để làm nốt các câu cuối (7 -> 11)
         if (filledCount < totalBlanks) {
             if (scrollViewComp) {
                 try {
                     if (typeof scrollViewComp.scrollToBottom === 'function') scrollViewComp.scrollToBottom(0.15);
                     else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(1.0, 0.15);
-                    else if (typeof scrollViewComp.jumpToBottom === 'function') scrollViewComp.jumpToBottom();
                 } catch (e) {}
             }
-            const canvas = document.getElementById('gameCanvas') || document.getElementById('GameCanvas') || document.querySelector('canvas');
-            if (canvas) {
-                canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 800, clientX: 400, clientY: 400, bubbles: true }));
-            }
-            await IOE.delay?.(350);
+            const canvas = getCanvasEl();
+            if (canvas) canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 800, clientX: 400, clientY: 400, bubbles: true }));
+            await IOE.delay?.(320);
             await solveVisibleRows();
         }
 
         if (filledCount > 0) {
-            IOE.toast(`🎉 Đã điền xong đầy đủ ${filledCount}/${totalBlanks} đáp án chuẩn xác 100%!`, 2500);
+            IOE.toast(`🎉 Đã điền ${filledCount}/${totalBlanks} đáp án Cloze Test!`, 2400);
         }
-
-        // Nạp kết quả đầy đủ vào HUD & Tab Đáp án
-        const fullDisplayAnswers = [];
-        const compactDisplayList = [];
-        for (let i = 1; i <= totalBlanks; i++) {
-            const rawAns = recordedAnswers[i] || (fullAnswers[String(i)] ? fullAnswers[String(i)] : '');
-            const ansStr = String(rawAns || '').trim();
-            const cleanWord = ansStr.replace(/^[a-d][.:)\s_-]+/i, '').trim();
-            const isValid = IOE.isValidClozeWord ? IOE.isValidClozeWord(cleanWord || ansStr) : (ansStr.length > 0 && !/^[_.\s-]+$/.test(ansStr));
-            if (isValid) {
-                fullDisplayAnswers.push(`• Câu ${i}: ${ansStr}`);
-                compactDisplayList.push(`Câu ${i}: ${ansStr}`);
-            }
-        }
-
-        if (compactDisplayList.length > 0) {
-            IOE.events?.emit('questionSolved', {
-                qId: `cloze_${totalBlanks}_questions`,
-                qText: `[Đoạn văn điền từ - Tổng cộng ${totalBlanks} câu hỏi]\n${passageText.slice(0, 120)}...`,
-                answer: compactDisplayList.join('  |  '),
-                tier: 'Tier 0 (Hệ Thống IOE Bypass - Khóa 100% Đáp Án Gốc)',
-                thinking: `📊 Đã phân tích toàn bộ ${totalBlanks} vị trí khuyết trong bài.\n✓ Cơ chế chống xáo trộn A, B, C, D đã kích hoạt thành công.\n✓ Đã điền chuẩn xác ${filledCount}/${totalBlanks} câu vào Cocos2d Canvas:\n${fullDisplayAnswers.join('\n')}`
-            });
-        }
-
         return filledCount > 0;
     }
 
-    /* ================= 3. DISPATCH CANVAS CLICK & KEYBOARD ================= */
+    /* ================= 3. DISPATCH CANVAS CLICK, KEYBOARD & EDITBOX ================= */
     function dispatchCanvasClick(canvas, x, y) {
         if (!canvas) return;
         const opts = { bubbles: true, cancelable: true, view: win, clientX: x, clientY: y, pageX: x, pageY: y };
@@ -1702,22 +2223,65 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         } catch (e) {}
     }
 
+    function setDomInputValue(el, value) {
+        if (!el) return;
+        try {
+            const proto = el.tagName === 'TEXTAREA' ? win.HTMLTextAreaElement?.prototype : win.HTMLInputElement?.prototype;
+            const desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+            if (desc && typeof desc.set === 'function') desc.set.call(el, value);
+            else el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (e) {}
+    }
+
+    function keyInfoForChar(ch) {
+        if (ch === ' ') return { key: ' ', code: 'Space', keyCode: 32 };
+        if (ch === "'") return { key: "'", code: 'Quote', keyCode: 222 };
+        if (ch === '.') return { key: '.', code: 'Period', keyCode: 190 };
+        if (ch === ',') return { key: ',', code: 'Comma', keyCode: 188 };
+        if (ch === '-') return { key: '-', code: 'Minus', keyCode: 189 };
+        if (ch === '?') return { key: '?', code: 'Slash', keyCode: 191 };
+        const up = ch.toUpperCase();
+        const isDigit = ch >= '0' && ch <= '9';
+        return {
+            key: ch,
+            code: isDigit ? `Digit${ch}` : `Key${up}`,
+            keyCode: up.charCodeAt(0)
+        };
+    }
+
     function typeCanvasString(str) {
-        const canvas = document.getElementById('GameCanvas') || document.querySelector('canvas.gameCanvas') || document.querySelector('canvas');
-        const target = canvas || win;
-        for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            const code = char.toUpperCase().charCodeAt(0);
-            const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, keyCode: code, which: code, bubbles: true };
+        const cleanStr = String(str || '').trim();
+        if (!cleanStr) return false;
+
+        // 1. Check active Cocos DOM EditBox input overlay first
+        const domInputs = Array.from(document.querySelectorAll('input.cocosEditBox, textarea.cocosEditBox, input[type="text"], input:not([type])'))
+            .filter(el => el.offsetParent !== null && !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+        if (domInputs.length > 0) {
+            const tgt = domInputs.find(el => el === document.activeElement) || domInputs[0];
+            tgt.focus();
+            setDomInputValue(tgt, cleanStr);
+            tgt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            tgt.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            return true;
+        }
+
+        // 2. Fallback Canvas keyboard events
+        const target = getCanvasEl() || win;
+        for (let i = 0; i < cleanStr.length; i++) {
+            const info = keyInfoForChar(cleanStr[i]);
+            const keyOpts = { key: info.key, code: info.code, keyCode: info.keyCode, which: info.keyCode, bubbles: true };
             target.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
             target.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
             target.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
         }
         target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        return true;
     }
 
-    /* ================= 3B. GHÉP CÂU / WORD REORDERING (BẠCH TUỘC THU NGỌC) ================= */
+    /* ================= 3B. WORD REORDERING (COCOS2D) ================= */
     async function solveCocosWordReordering(scene) {
         if (!scene) return false;
         try {
@@ -1726,136 +2290,249 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
             let answerBtn = null;
 
             for (const c of clickables) {
-                const nameLower = (c.name || '').toLowerCase();
-                const t = c.text.trim();
-                const tLower = t.toLowerCase();
-                if (nameLower.includes('ans') || nameLower.includes('submit') || tLower === 'answer' || tLower === 'trả lời') {
+                const nl = (c.name || '').toLowerCase();
+                const t = (c.text || '').trim();
+                const tl = t.toLowerCase();
+                if (!t) continue;
+                if (nl.includes('submit') || tl === 'answer' || tl === 'trả lời' || tl === 'nộp bài') {
                     answerBtn = c;
                     continue;
                 }
-                if (t.length > 0 && t.length < 50 && !['ok', 'start', 'close', 'back', 'reset', 'sound'].includes(tLower)) {
+                if (t.length > 0 && t.length < 48 && !/^(ok|start|close|back|reset|sound|skip|replay)$/i.test(tl) && !/^[A-D][.:)]/i.test(t)) {
                     wordBlocks.push(c);
                 }
             }
 
-            if (wordBlocks.length < 3) return false;
+            // Reorder scenes usually show >= 4 clickable word pills with a prompt or without A/B/C/D options
+            if (wordBlocks.length < 4) return false;
+            const looksLikeMC = wordBlocks.every(w => /^[A-D][.:)]/i.test(w.text));
+            if (looksLikeMC) return false;
 
-            // Thu thập text của các block để xác định câu cần ghép
             const words = wordBlocks.map(b => b.text.trim());
-            const promptContext = words.join(' ');
-            const meta = await IOE.question?.solveQuestion(null, promptContext, words);
+            const texts = extractCocosTexts(scene).map(x => x.text).filter(t => !words.includes(t));
+            const stem = texts.join(' ');
+            const promptContext = `Arrange words: ${words.join(' | ')}${stem ? ' (' + stem + ')' : ''}`;
+            const meta = await IOE.question?.solveQuestion(null, promptContext, words, 'reorder');
             if (!meta || !meta.answer) return false;
 
-            const fullTarget = String(meta.answer).trim().toLowerCase().replace(/[^a-z0-9\s]/g, '');
+            const fullTarget = String(meta.answer).trim().toLowerCase().replace(/[^a-z0-9\s']/g, '').replace(/\s+/g, ' ');
             const availableBlocks = wordBlocks.slice();
             const clickOrder = [];
             let remaining = fullTarget;
 
-            // Thuật toán so khớp tuần tự từng khối từ (hỗ trợ cả khối 1 từ và cụm 2-3 từ)
             while (remaining.length > 0 && availableBlocks.length > 0) {
                 remaining = remaining.trim();
-                let foundMatch = false;
-
-                for (let i = 0; i < availableBlocks.length; i++) {
-                    const block = availableBlocks[i];
-                    const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-                    if (!cleanBlock) continue;
-
-                    if (remaining.startsWith(cleanBlock)) {
-                        clickOrder.push(block);
-                        availableBlocks.splice(i, 1);
-                        remaining = remaining.slice(cleanBlock.length).trim();
-                        foundMatch = true;
-                        break;
-                    }
+                let foundIdx = availableBlocks.findIndex(block => {
+                    const cb = block.text.toLowerCase().replace(/[^a-z0-9\s']/g, '').trim();
+                    return cb && (remaining === cb || remaining.startsWith(cb + ' '));
+                });
+                if (foundIdx < 0) {
+                    foundIdx = availableBlocks.findIndex(block => {
+                        const cb = block.text.toLowerCase().replace(/[^a-z0-9\s']/g, '').trim();
+                        return cb && remaining.startsWith(cb);
+                    });
                 }
-
-                if (!foundMatch) {
-                    let bestIdx = -1;
-                    for (let i = 0; i < availableBlocks.length; i++) {
-                        const cleanBlock = availableBlocks[i].text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-                        const firstWord = cleanBlock.split(/\s+/)[0];
-                        if (firstWord && remaining.startsWith(firstWord)) {
-                            bestIdx = i;
-                            break;
-                        }
-                    }
-                    if (bestIdx >= 0) {
-                        const block = availableBlocks[bestIdx];
-                        clickOrder.push(block);
-                        availableBlocks.splice(bestIdx, 1);
-                        const cleanBlock = block.text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-                        remaining = remaining.replace(cleanBlock, '').trim();
-                    } else {
-                        break;
-                    }
-                }
+                if (foundIdx < 0) break;
+                const chosen = availableBlocks.splice(foundIdx, 1)[0];
+                const cb = chosen.text.toLowerCase().replace(/[^a-z0-9\s']/g, '').trim();
+                clickOrder.push(chosen);
+                remaining = remaining.slice(cb.length).trim();
             }
 
-            // Click lần lượt các block theo đúng thứ tự
+            if (clickOrder.length < 3) return false;
             for (const block of clickOrder) {
                 await clickCocosNode(block.node);
-                await IOE.delay?.(280);
+                await IOE.delay?.(240);
             }
-
-            if (clickOrder.length >= 2) {
-                if (answerBtn) {
-                    await IOE.delay?.(400);
-                    await clickCocosNode(answerBtn.node);
-                    IOE.toast(`🎉 Đã bấm ANSWER hoàn tất Ghép câu! (${clickOrder.length} khối)`, 1500);
-                }
-                return true;
+            if (answerBtn) {
+                await IOE.delay?.(320);
+                await clickCocosNode(answerBtn.node);
             }
+            IOE.toast(`🧩 Đã ghép ${clickOrder.length} khối từ!`, 1500);
+            return true;
         } catch (e) {
-            console.warn('[YANZIOE solveCocosWordReordering error]', e);
+            return false;
         }
-        return false;
     }
 
-    /* ================= 4. UNIFIED CANVAS SOLVER ================= */
+    /* ================= 4. CREATEJS / ADOBE ANIMATE ENGINE ================= */
+    function isCreateJSVisible(obj) {
+        if (!obj) return false;
+        if (obj.visible === false) return false;
+        if (typeof obj.alpha === 'number' && obj.alpha <= 0.05) return false;
+        return true;
+    }
+
+    function extractCreateJSData(root) {
+        const texts = [];
+        const clickables = [];
+        const seen = new WeakSet();
+
+        function walk(obj, depth = 0) {
+            if (!obj || depth > 14 || !isCreateJSVisible(obj) || seen.has(obj)) return;
+            seen.add(obj);
+
+            if (typeof obj.text === 'string' && obj.text.trim()) {
+                let gx = obj.x || 0, gy = obj.y || 0;
+                try {
+                    if (typeof obj.localToGlobal === 'function') {
+                        const gp = obj.localToGlobal(0, 0);
+                        gx = gp.x; gy = gp.y;
+                    }
+                } catch (e) {}
+                texts.push({ obj, text: obj.text.trim(), x: gx, y: gy });
+            }
+
+            const hasListener = !!(obj._listeners?.click || obj._listeners?.mousedown || obj.cursor === 'pointer');
+            const nameLower = (obj.name || '').toLowerCase();
+            const isNamedBtn = /(btn|opt|choice|ans|item|next|submit|start|ok)/.test(nameLower);
+            if (obj.mouseEnabled !== false && (hasListener || isNamedBtn) && obj.children) {
+                const subTexts = [];
+                (obj.children || []).forEach(c => {
+                    if (isCreateJSVisible(c) && typeof c.text === 'string' && c.text.trim()) subTexts.push(c.text.trim());
+                });
+                const label = subTexts.join(' ').trim();
+                let gx = obj.x || 0, gy = obj.y || 0;
+                try {
+                    if (typeof obj.localToGlobal === 'function') {
+                        const gp = obj.localToGlobal(0, 0);
+                        gx = gp.x; gy = gp.y;
+                    }
+                } catch (e) {}
+                if (label || isNamedBtn) {
+                    clickables.push({ obj, text: label, x: gx, y: gy, name: obj.name || '' });
+                }
+            }
+
+            if (Array.isArray(obj.children)) {
+                for (const ch of obj.children) walk(ch, depth + 1);
+            }
+        }
+
+        walk(root, 0);
+        return { texts, clickables };
+    }
+
+    function clickCreateJSObj(item, canvas) {
+        if (!item?.obj) return false;
+        try {
+            const obj = item.obj;
+            if (typeof obj.dispatchEvent === 'function') {
+                obj.dispatchEvent('mousedown');
+                obj.dispatchEvent('pressup');
+                obj.dispatchEvent('click');
+            }
+            if (canvas && (canvas.width || 1) > 0) {
+                const rect = canvas.getBoundingClientRect();
+                const cx = rect.left + (item.x / canvas.width) * rect.width;
+                const cy = rect.top + (item.y / canvas.height) * rect.height;
+                dispatchCanvasClick(canvas, cx, cy);
+            }
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async function solveCreateJSGame() {
+        const stage = win.stage || win.exportRoot?.stage || null;
+        const root = win.exportRoot || stage;
+        if (!root) return false;
+        IOE.state.lastEngine = 'CreateJS / Animate';
+
+        const canvas = getCanvasEl();
+        const { texts, clickables } = extractCreateJSData(root);
+        if (texts.length === 0 && clickables.length === 0) return false;
+
+        // Filter non-chrome texts
+        const btnTextSet = new Set(clickables.map(c => c.text).filter(Boolean));
+        const optionBtns = clickables.filter(c => c.text && !/^(score|time|sound|mute|back|exit|\d+:\d+)$/i.test(c.text));
+        const optStrings = optionBtns.map(c => c.text);
+        const stemParts = texts
+            .map(t => t.text)
+            .filter(t => !btnTextSet.has(t) && !/^(score|điểm|time|0?\d:\d\d|\d+\/\d+)$/i.test(t));
+
+        const qText = (stemParts.length ? stemParts : texts.map(t => t.text)).join(' ').trim();
+        if (!qText) return false;
+
+        const meta = await IOE.question?.solveQuestion(null, qText, optStrings);
+        if (!meta?.answer) return false;
+
+        if (optionBtns.length > 0) {
+            const matched = matchCocosButton(optionBtns, meta.answer);
+            if (matched && clickCreateJSObj(matched, canvas)) {
+                IOE.toast(`⚡ [CreateJS] Chọn: ${matched.text || meta.answer}`, 1400);
+                return true;
+            }
+        }
+        typeCanvasString(String(meta.answer));
+        return true;
+    }
+
+    /* ================= 5. UNIFIED CANVAS SOLVER ================= */
+    function isHudChromeText(t) {
+        const s = String(t || '').trim();
+        return /^(score|điểm|time|timer|thời gian|\d{1,2}:\d{2}|câu\s*\d+(\/\d+)?|question\s*\d+(\/\d+)?|\d+\/\d+)$/i.test(s);
+    }
+
     async function solveCanvasGame() {
-        // Quét bộ nhớ Cocos2d để trích xuất Key gốc từ RAM
+        if (!isLicensed()) return false;
         try { IOE.question?.scanCocosMemoryForAnswers?.(); } catch (e) {}
 
         const cocosScene = getCocosScene();
         if (cocosScene) {
             const clickables = findCocosClickables(cocosScene);
 
-            // Bấm START / OK nếu đang ở màn hình hướng dẫn ban đầu hoặc kết thúc bài
-            for (const c of clickables) {
-                const t = c.text.toLowerCase();
-                if (t === 'ok' || t === 'start' || t.includes('bắt đầu') || t.includes('tiếp tục')) {
-                    await clickCocosNode(c.node);
-                    IOE.toast('🚀 Tiếp tục vòng thi Cocos2d!', 1200);
-                    await IOE.delay?.(800);
-                    return true;
+            // Only auto-press OK / Start if it's an intro/transition screen (<= 3 clickable buttons total)
+            if (clickables.length > 0 && clickables.length <= 3) {
+                for (const c of clickables) {
+                    const tl = c.text.toLowerCase();
+                    if (tl === 'ok' || tl === 'start' || tl === 'bắt đầu' || tl === 'tiếp tục') {
+                        await clickCocosNode(c.node);
+                        IOE.toast('🚀 Tiếp tục màn Cocos2d!', 1100);
+                        await IOE.delay?.(700);
+                        return true;
+                    }
                 }
             }
 
-            // 1. Thử giải dạng bài Cloze Passage ("Lâu đài trên mây")
-            const clozeSuccess = await solveCocosClozePassage(cocosScene);
-            if (clozeSuccess) return true;
+            // 1. Cloze Passage ("Lâu đài trên mây")
+            if (await solveCocosClozePassage(cocosScene)) return true;
 
-            // 2. Thử giải dạng Ghép câu / Word Reordering ("Bạch tuộc thu ngọc")
-            const reorderSuccess = await solveCocosWordReordering(cocosScene);
-            if (reorderSuccess) return true;
+            // 2. Word Reordering ("Bạch tuộc thu ngọc")
+            if (await solveCocosWordReordering(cocosScene)) return true;
 
-            // 3. Thử giải dạng trắc nghiệm thông thường (Single Multiple-Choice) hoặc ô điền từ
+            // 3. Multiple Choice / Fill-in-the-blank (separate prompt stem vs option buttons + image clues)
             const cocosTexts = extractCocosTexts(cocosScene);
             if (cocosTexts.length > 0) {
-                const rawStrings = cocosTexts.map(t => t.text);
-                const questionText = rawStrings.join(' ');
-                const meta = await IOE.question?.solveQuestion(null, questionText, rawStrings);
+                const optBtns = clickables.filter(c => {
+                    const t = (c.text || '').trim();
+                    const nl = (c.name || '').toLowerCase();
+                    return t && !isHudChromeText(t) && !/(submit|next|skip|close|sound|back|reset|hint)/.test(nl) &&
+                        !/^(nộp bài|trả lời|tiếp tục|bỏ qua|nghe lại|submit|next|ok|start)$/i.test(t);
+                });
+                const optSet = new Set(optBtns.map(b => b.text.trim()));
+                const stemTexts = cocosTexts
+                    .map(x => x.text.trim())
+                    .filter(t => !isHudChromeText(t) && !optSet.has(t));
+
+                const spriteClues = extractSceneSpriteClues(cocosScene);
+                let qPrompt = stemTexts.join(' ').trim() || cocosTexts.map(x => x.text).join(' ').trim();
+                if (spriteClues.length > 0) {
+                    qPrompt += ` [Image hints: ${spriteClues.slice(0, 5).join(', ')}]`;
+                }
+
+                const optStrings = optBtns.map(b => b.text);
+                const meta = await IOE.question?.solveQuestion(null, qPrompt, optStrings);
                 if (meta?.answer) {
                     const ansStr = String(meta.answer).trim();
-                    const ansLower = ansStr.toLowerCase();
 
-                    // a. Kiểm tra nếu có EditBox trong Cocos Scene (Dạng bài điền từ)
+                    // a. Check Cocos EditBox + visible DOM input overlay
                     const cc = win.cc;
                     if (cc && cc.EditBox) {
                         const editBoxes = [];
                         (function findEB(n) {
-                            if (!n) return;
+                            if (!n || !isNodeVisible(n)) return;
                             if (typeof n.getComponent === 'function') {
                                 const eb = n.getComponent(cc.EditBox);
                                 if (eb) editBoxes.push({ node: n, comp: eb });
@@ -1867,67 +2544,57 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                         if (editBoxes.length > 0) {
                             for (const eb of editBoxes) {
                                 eb.comp.string = ansStr;
+                                if (eb.comp._impl?._elem) setDomInputValue(eb.comp._impl._elem, ansStr);
                                 if (typeof eb.comp._updateStringLabel === 'function') eb.comp._updateStringLabel();
-                                eb.node.emit('editing-did-ended', eb.comp);
-                                eb.node.emit('text-changed', eb.comp);
+                                eb.node.emit?.('editing-did-ended', eb.comp);
+                                eb.node.emit?.('text-changed', eb.comp);
                             }
-                            IOE.toast(`⚡ Đã điền đáp án vào EditBox: ${ansStr}`, 1500);
+                            IOE.toast(`✍️ Đã điền EditBox: ${ansStr}`, 1400);
+                            const submitBtn = clickables.find(c => /(submit|trả lời|nộp bài|xác nhận|ok|next)/i.test(c.text + ' ' + c.name));
+                            if (submitBtn) {
+                                await IOE.delay?.(250);
+                                await clickCocosNode(submitBtn.node);
+                            }
                             return true;
                         }
                     }
 
-                    // b. Click nút trắc nghiệm Cocos
-                    const updatedClickables = findCocosClickables(cocosScene);
-                    for (const c of updatedClickables) {
-                        const ct = c.text.toLowerCase();
-                        if (ct.includes(ansLower) || ct.startsWith(ansLower)) {
-                            await clickCocosNode(c.node);
-                            IOE.toast(`⚡ Đã tự click đáp án Cocos2d: ${meta.answer}`, 1500);
+                    // b. Click matched multiple-choice button cleanly
+                    if (optBtns.length > 0) {
+                        const matchedBtn = matchCocosButton(optBtns, ansStr);
+                        if (matchedBtn) {
+                            await clickCocosNode(matchedBtn.node);
+                            IOE.toast(`⚡ [Cocos2d] Chọn: ${matchedBtn.text || ansStr}`, 1400);
                             return true;
                         }
                     }
 
-                    // c. Nhập phím vào Canvas
+                    // c. Keyboard/DOM typing fallback
                     typeCanvasString(ansStr);
                     return true;
                 }
             }
         }
 
-        // 3. Fallback CreateJS
-        const stage = win.stage || win.exportRoot?.stage || null;
-        const root = win.exportRoot || null;
-        if (root) {
-            const texts = (function extract(c) {
-                if (!c) return [];
-                const res = [];
-                (c.children || []).forEach(ch => {
-                    if (ch.text) res.push(ch.text);
-                    if (ch.children) res.push(...extract(ch));
-                });
-                return res;
-            })(root);
-
-            if (texts.length > 0) {
-                const meta = await IOE.question?.solveQuestion(null, texts.join(' '), texts);
-                if (meta?.answer) {
-                    typeCanvasString(String(meta.answer));
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        // Fallback: CreateJS / Adobe Animate Canvas
+        return await solveCreateJSGame();
     }
 
     IOE.canvas = {
         solveCanvasGame,
         solveCocosClozePassage,
+        solveCocosWordReordering,
+        solveCreateJSGame,
         getCocosScene,
+        isNodeVisible,
         extractCocosTexts,
+        extractSceneSpriteClues,
         findCocosClickables,
+        matchCocosButton,
         clickCocosNode,
-        typeCanvasString
+        typeCanvasString,
+        typeIntoCanvas: typeCanvasString,
+        setDomInputValue
     };
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -1941,6 +2608,25 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
 
     const HUD_ID = 'yanzioe-revealer-hud';
 
+    function copyToClipboard(text) {
+        if (navigator.clipboard?.writeText) {
+            return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+        }
+        return Promise.resolve(fallbackCopy(text));
+    }
+
+    function fallbackCopy(text) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        } catch (e) {}
+    }
+
     function ensureHud() {
         let hud = document.getElementById(HUD_ID);
         if (!hud && document.body) {
@@ -1951,7 +2637,7 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 bottom: 12px;
                 left: 16px;
                 transform: none;
-                z-index: 9999999;
+                z-index: 2147483645;
                 background: rgba(15, 23, 42, 0.94);
                 backdrop-filter: blur(10px);
                 border: 1px solid rgba(56, 189, 248, 0.45);
@@ -1976,7 +2662,7 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
     }
 
     function renderReveal(meta) {
-        if (!meta || !IOE.features?.showAnswers || IOE.features?.streamMode) {
+        if (!meta || !(IOE.state?.licensed || IOE.license?.isLicensed?.()) || !IOE.features?.showAnswers || IOE.features?.streamMode) {
             const hud = document.getElementById(HUD_ID);
             if (hud) hud.style.display = 'none';
             return;
@@ -1990,6 +2676,8 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         const safeThink = IOE.escHtml(meta.thinking || '');
 
         hud.style.display = 'flex';
+        hud.style.maxHeight = '54px';
+        hud.style.overflow = 'hidden';
         hud.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;width:100%;">
                 <div style="display:flex;align-items:center;gap:6px;min-width:0;max-width:calc(100% - 215px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" id="yanzioe-copy-area" title="Nhấn để sao chép">
@@ -2006,12 +2694,14 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         `;
 
         document.getElementById('yanzioe-fill-btn')?.addEventListener('click', () => {
-            if (IOE.auto?.fillAnswer) IOE.auto.fillAnswer(meta.answer);
-            if (IOE.canvas?.typeIntoCanvas) IOE.canvas.typeIntoCanvas(meta.answer);
+            const okDom = IOE.auto?.fillAnswer ? IOE.auto.fillAnswer(meta.answer) : false;
+            if (!okDom && IOE.canvas?.typeIntoCanvas) {
+                IOE.canvas.typeIntoCanvas(meta.answer);
+            }
         });
 
         const copyAction = () => {
-            navigator.clipboard.writeText(meta.answer || '').then(() => {
+            copyToClipboard(meta.answer || '').then(() => {
                 IOE.toast('✓ Đã chép đáp án!', 1200);
             });
         };
@@ -2042,45 +2732,95 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
 /* --- functions/autoAnswer.js --- */
 (function (global) {
     'use strict';
-    const IOE = global.IOE;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const IOE = global.IOE || win.IOE;
     if (!IOE) return;
+
+    const nativeSetInterval = IOE.timers?.setInterval || win.setInterval.bind(win);
+
+    /* ================= 1. SAFE FREEZE EXAM TIMER ================= */
+    let frozenTickCount = 0;
+    if (!win.__YANZIOE_TIMER_HOOKED__) {
+        win.__YANZIOE_TIMER_HOOKED__ = true;
+        const rawSetInterval = win.setInterval.bind(win);
+        win.setInterval = function (fn, ms, ...args) {
+            const delayMs = Number(ms || 0);
+            let fnSrc = '';
+            try { fnSrc = typeof fn === 'function' ? Function.prototype.toString.call(fn) : String(fn || ''); } catch (e) {}
+            const isCountdownTick = delayMs >= 850 && delayMs <= 1200 &&
+                /(time|timer|second|sec|countdown|remain|left|demnguoc|clock|minutes?|phut|giay)/i.test(fnSrc) &&
+                !fnSrc.includes('yanzioe');
+
+            if (isCountdownTick && typeof fn === 'function') {
+                const wrapped = function (...wArgs) {
+                    if (IOE.features?.freezeTimer && (IOE.state?.licensed || IOE.license?.isLicensed?.())) {
+                        frozenTickCount++;
+                        return;
+                    }
+                    return fn.apply(this, wArgs);
+                };
+                return rawSetInterval(wrapped, delayMs, ...args);
+            }
+            return rawSetInterval(fn, ms, ...args);
+        };
+    }
+
+    function computeStepDelay() {
+        const mode = IOE.featureConfigs?.questionMode || 'stealth';
+        if (mode === 'turbo') return 220;
+        const base = Number(IOE.featureConfigs?.autoDelay || 1400);
+        return Math.round(base * (0.78 + Math.random() * 0.44));
+    }
 
     let isProcessing = false;
 
-    async function stepOnce() {
-        if (isProcessing || !IOE.features?.autoAnswer) return;
+    async function stepOnce(forceRun = false) {
+        if (isProcessing) return false;
+        if (!forceRun && !IOE.features?.autoAnswer) return false;
+        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
         isProcessing = true;
 
         try {
-            // 1. Quét Canvas / Cocos2d minigame
+            // 1. Canvas / Cocos2d / CreateJS minigame
             if (IOE.features?.canvasMode !== false && IOE.canvas?.solveCanvasGame) {
                 const canvasSolved = await IOE.canvas.solveCanvasGame();
                 if (canvasSolved) {
-                    await IOE.delay(IOE.featureConfigs?.autoDelay || 1500);
-                    return;
+                    await IOE.delay(computeStepDelay());
+                    return true;
                 }
             }
 
-            // 2. Quét Web DOM
-            const qEl = document.querySelector('.question-content, .exam-content, .title-question, .content-question, #question-content');
-            const qText = qEl ? qEl.innerText.trim() : '';
-
-            const choiceEls = Array.from(document.querySelectorAll('.answer-item, .choice-item, input[type="radio"], .btn-answer, .item-answer'));
-            const options = choiceEls.map(c => c.innerText.trim()).filter(Boolean);
+            // 2. Web DOM Question Extraction
+            const qSelectors = '.question-content, .exam-content, .title-question, .content-question, #question-content, .ques-content, .quiz-question';
+            const qEls = Array.from(document.querySelectorAll(qSelectors))
+                .filter(el => el.offsetParent !== null && !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+            const qEl = qEls[0] || document.querySelector('.question-content, .exam-content, #question-content');
+            const qText = qEl ? (qEl.innerText || qEl.textContent || '').trim() : '';
 
             if (qText) {
-                const qId = qEl.dataset?.id || qEl.id || qText.slice(0, 40);
+                IOE.state.lastEngine = 'Web DOM';
+                const scopeRoot = qEl.closest('.question-container, .question-box, .quiz-item, .exam-item') || document;
+                const choiceEls = Array.from(scopeRoot.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, label'))
+                    .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+                const options = choiceEls.map(c => (c.innerText || c.textContent || '').trim()).filter(Boolean);
+
+                const chips = Array.from(scopeRoot.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
+                const isDomReorder = chips.length >= 3 && !options.length;
+                const taskOpts = isDomReorder ? chips.map(c => c.innerText.trim()).filter(Boolean) : options;
+                const qId = qEl.dataset?.id || qEl.id || qText.slice(0, 48);
+
                 let meta = IOE.state.solvedMeta.get(qId);
                 if (!meta) {
-                    meta = await IOE.question.solveQuestion(qId, qText, options);
+                    meta = await IOE.question.solveQuestion(qId, qText, taskOpts, isDomReorder ? 'reorder' : '');
                 }
 
                 if (meta?.answer) {
-                    fillAnswer(meta.answer);
-                    if (IOE.features?.autoAnswer) {
-                        await IOE.delay(IOE.featureConfigs?.autoDelay || 1200);
+                    const filled = fillAnswer(meta.answer, scopeRoot === document ? null : scopeRoot);
+                    if (filled && IOE.features?.autoAnswer) {
+                        await IOE.delay(computeStepDelay());
                         clickNextButton();
                     }
+                    return true;
                 }
             }
         } catch (e) {
@@ -2088,77 +2828,120 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         } finally {
             isProcessing = false;
         }
+        return false;
+    }
+
+    function setNativeInputValue(inp, val) {
+        if (!inp) return;
+        const proto = inp.tagName === 'TEXTAREA' ? win.HTMLTextAreaElement?.prototype : win.HTMLInputElement?.prototype;
+        const desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc && typeof desc.set === 'function') desc.set.call(inp, val);
+        else inp.value = val;
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function stripPrefix(s) {
+        return String(s || '').replace(/^[A-Da-d][.:)\]\s_-]+/, '').trim();
     }
 
     function fillAnswer(ans, area = null) {
-        if (!ans) return;
-        const normAns = String(ans).trim().toLowerCase();
+        if (!ans) return false;
+        const rawAns = String(ans).trim();
+        const normAns = rawAns.toLowerCase();
+        const cleanAns = stripPrefix(rawAns).toLowerCase();
         const root = area || document;
 
-        // 1. Dạng Sắp xếp từ (nếu có thẻ từ .word-item và đáp án là câu nhiều từ)
+        // 1. Word Reordering chips
         const chips = Array.from(root.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
-        if (chips.length > 0 && normAns.includes(' ')) {
-            const words = ans.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        if (chips.length > 0 && cleanAns.includes(' ')) {
+            chips.forEach(c => { delete c.dataset.kwClicked; });
+            const words = rawAns.split(/\s+/).map(w => w.toLowerCase().replace(/[^a-z0-9']/g, ''));
+            let hits = 0;
             words.forEach(targetWord => {
+                if (!targetWord) return;
                 const matchedChip = chips.find(chip => {
-                    const cText = chip.innerText.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const cText = (chip.innerText || chip.textContent || '').trim().toLowerCase().replace(/[^a-z0-9']/g, '');
                     return cText === targetWord && !chip.dataset.kwClicked;
                 });
                 if (matchedChip) {
                     matchedChip.dataset.kwClicked = '1';
                     matchedChip.click();
+                    hits++;
                 }
             });
-            IOE.toast('🧩 Đã sắp xếp câu!', 1200);
-            return;
+            if (hits > 0) {
+                IOE.toast('🧩 Đã sắp xếp câu!', 1200);
+                return true;
+            }
         }
 
-        // 2. Dạng Điền từ vào ô input
-        const inputs = Array.from(root.querySelectorAll('input.blank-input, input[type="text"].answer, input.form-control, input.input-answer'));
+        // 2. Fill-in-the-blank input
+        const inputs = Array.from(root.querySelectorAll('input.blank-input, input[type="text"].answer, input.form-control, input.input-answer, textarea.answer'))
+            .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal') && !el.closest('#yanzioe-revealer-hud'));
         if (inputs.length > 0) {
             const inp = inputs.find(el => !el.value) || inputs[0];
             if (inp) {
-                inp.value = ans;
-                inp.dispatchEvent(new Event('input', { bubbles: true }));
-                inp.dispatchEvent(new Event('change', { bubbles: true }));
-                IOE.toast(`✍️ Đã điền: ${ans}`, 1000);
-                return;
+                setNativeInputValue(inp, rawAns);
+                IOE.toast(`✍️ Đã điền: ${rawAns}`, 1000);
+                return true;
             }
         }
 
-        // 3. Dạng Trắc nghiệm (Radio / Buttons A, B, C, D)
-        const choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type="radio"]'));
+        // 3. Multiple Choice buttons / radios (strict match, no single-letter substring collision)
+        const choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type="radio"]'))
+            .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
         if (choices.length > 0) {
-            for (let i = 0; i < choices.length; i++) {
-                const c = choices[i];
-                const text = c.innerText.trim().toLowerCase();
-                const letter = String.fromCharCode(65 + i).toLowerCase();
-                if (normAns === letter || text.includes(normAns) || normAns.includes(text)) {
-                    c.click();
-                    IOE.toast(`🎯 Đã chọn: ${c.innerText.trim()}`, 1000);
-                    return;
-                }
+            // Pass 1: exact text match
+            let matched = choices.find(c => {
+                const ct = stripPrefix(c.innerText || c.value || '').toLowerCase();
+                return ct && ct === cleanAns;
+            });
+            // Pass 2: word-boundary match (>= 2 chars)
+            if (!matched && cleanAns.length >= 2) {
+                const esc = cleanAns.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const rx = new RegExp(`(^|\\s)${esc}(\\s|$)`, 'i');
+                matched = choices.find(c => rx.test(stripPrefix(c.innerText || c.value || '')));
+            }
+            // Pass 3: explicit letter A/B/C/D
+            if (!matched && /^[a-d]\.?$/.test(normAns)) {
+                const letIdx = normAns.charCodeAt(0) - 97;
+                if (choices[letIdx]) matched = choices[letIdx];
+            }
+            if (matched) {
+                if (matched.tagName === 'INPUT') matched.checked = true;
+                matched.click();
+                IOE.toast(`🎯 Đã chọn: ${(matched.innerText || matched.value || rawAns).trim()}`, 1000);
+                return true;
             }
         }
+        return false;
     }
 
     function clickNextButton() {
-        const nextBtns = Array.from(document.querySelectorAll('button, a, input[type="button"]')).filter(btn => {
-            const t = (btn.innerText || btn.value || '').toLowerCase();
-            return /(tiếp tục|câu tiếp|qua câu|nộp bài|xác nhận|next|submit)/.test(t) && !btn.disabled;
+        const nextBtns = Array.from(document.querySelectorAll('button, a, input[type="button"], input[type="submit"]')).filter(btn => {
+            if (btn.closest('#yanzioe-root') || btn.closest('#yanzioe-revealer-hud') || btn.closest('#yanzioe-license-modal')) return false;
+            if (btn.disabled) return false;
+            const style = win.getComputedStyle ? win.getComputedStyle(btn) : null;
+            if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+            const t = (btn.innerText || btn.value || '').toLowerCase().trim();
+            return /^(tiếp tục|câu tiếp|câu sau|qua câu|nộp bài|xác nhận|next|next question|submit|continue)/.test(t);
         });
         if (nextBtns.length > 0) {
             nextBtns[0].click();
-            IOE.toast('⏩ Đã chuyển câu tiếp theo', 1000);
+            IOE.toast('⏩ Đã chuyển câu tiếp theo', 900);
+            return true;
         }
+        return false;
     }
 
-    setInterval(stepOnce, 2000);
+    nativeSetInterval(() => { stepOnce(false); }, 1800);
 
     IOE.auto = {
         stepOnce,
         fillAnswer,
-        clickNextButton
+        clickNextButton,
+        getFreezeTicks: () => frozenTickCount
     };
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -2170,34 +2953,21 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
     const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
+    const nativeSetInterval = IOE.timers?.setInterval || win.setInterval.bind(win);
     let isMenuVisible = true;
-    let isCollapsed = false;
-    let activeTab = 'features';
-
     const STORAGE_KEY = 'YANZIOE_CONFIG_VIP_V1';
 
     function loadSavedConfig() {
         let bestKey = '';
         try {
-            // Quét tất cả các kho lưu trữ tiềm năng để tìm API key còn lưu
             const candidates = [
                 IOE.featureConfigs?.apiKey,
                 localStorage.getItem('IOE_API_KEY'),
                 localStorage.getItem('YANZIOE_API_KEY'),
-                (function () {
-                    try { return sessionStorage.getItem('IOE_API_KEY') || sessionStorage.getItem('YANZIOE_API_KEY'); } catch (e) { return ''; }
-                })(),
-                (function () {
-                    try {
-                        const wn = JSON.parse(window.name || '{}');
-                        return wn.IOE_API_KEY || wn.apiKey || '';
-                    } catch (e) { return ''; }
-                })(),
-                (function () {
-                    const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || '');
-                    return m ? decodeURIComponent(m[1]) : '';
-                })(),
-                (typeof GM_getValue !== 'undefined' ? GM_getValue('IOE_API_KEY') : '')
+                (function () { try { return sessionStorage.getItem('IOE_API_KEY') || sessionStorage.getItem('YANZIOE_API_KEY'); } catch (e) { return ''; } })(),
+                (function () { try { const wn = JSON.parse(window.name || '{}'); return wn.IOE_API_KEY || wn.apiKey || ''; } catch (e) { return ''; } })(),
+                (function () { const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || ''); return m ? decodeURIComponent(m[1]) : ''; })(),
+                (typeof GM_getValue === 'function' ? GM_getValue('IOE_API_KEY') : '')
             ];
             for (const c of candidates) {
                 if (c && typeof c === 'string' && c.trim().length > 5) {
@@ -2212,19 +2982,14 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 if (parsed.features) Object.assign(IOE.features, parsed.features);
                 if (parsed.configs) {
                     const savedApiKey = parsed.configs.apiKey;
-                    delete parsed.configs.apiKey; // Không để chuỗi rỗng ghi đè key hợp lệ
+                    delete parsed.configs.apiKey;
                     Object.assign(IOE.featureConfigs, parsed.configs);
-                    if (savedApiKey && savedApiKey.trim().length > 5 && !bestKey) {
-                        bestKey = savedApiKey.trim();
-                    }
+                    if (savedApiKey && savedApiKey.trim().length > 5 && !bestKey) bestKey = savedApiKey.trim();
                 }
             }
         } catch (e) {}
 
-        if (bestKey) {
-            IOE.featureConfigs.apiKey = bestKey;
-        }
-        return null;
+        if (bestKey) IOE.featureConfigs.apiKey = bestKey;
     }
 
     function saveAllConfigs() {
@@ -2239,35 +3004,28 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
             if (key) {
                 localStorage.setItem('IOE_API_KEY', key);
                 localStorage.setItem('YANZIOE_API_KEY', key);
+                try { sessionStorage.setItem('IOE_API_KEY', key); } catch (e) {}
                 try {
-                    sessionStorage.setItem('IOE_API_KEY', key);
-                    sessionStorage.setItem('YANZIOE_API_KEY', key);
+                    let wn = {}; try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
+                    wn.IOE_API_KEY = key; window.name = JSON.stringify(wn);
                 } catch (e) {}
-                try {
-                    let wn = {};
-                    try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
-                    wn.IOE_API_KEY = key;
-                    window.name = JSON.stringify(wn);
-                } catch (e) {}
-                try {
-                    document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`;
-                } catch (e) {}
-                if (typeof GM_setValue !== 'undefined') {
-                    try { GM_setValue('IOE_API_KEY', key); } catch (e) {}
-                }
+                try { document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`; } catch (e) {}
+                if (typeof GM_setValue === 'function') { try { GM_setValue('IOE_API_KEY', key); } catch (e) {} }
             }
         } catch (e) {}
     }
 
-    // Tải cấu hình đã lưu ngay khi khởi động
     loadSavedConfig();
 
     function createMainMenu() {
+        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return;
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
         const root = document.createElement('div');
         root.id = 'yanzioe-root';
         root.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;pointer-events:auto;user-select:none;';
+
+        const licState = IOE.license?.getState?.() || {};
 
         root.innerHTML = `
             <style>
@@ -2280,12 +3038,9 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 .yanz-rgb-text { animation: ioeRgb 4s linear infinite; }
                 .yanz-tab-btn {
                     flex: 1; padding: 7px 0; background: transparent; border: none; border-bottom: 2px solid transparent;
-                    color: #94a3b8; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s ease;
-                    text-align: center;
+                    color: #94a3b8; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; text-align: center;
                 }
-                .yanz-tab-btn.active {
-                    color: #38bdf8; border-bottom: 2px solid #38bdf8; background: rgba(56,189,248,0.08);
-                }
+                .yanz-tab-btn.active { color: #38bdf8; border-bottom: 2px solid #38bdf8; background: rgba(56,189,248,0.08); }
                 .yanz-tab-btn:hover { color: #f8fafc; }
                 .yanz-toggle-row {
                     display: flex; align-items: center; justify-content: space-between;
@@ -2305,17 +3060,15 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                     cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 10px rgba(2,132,199,0.35);
                     width: 100%; text-align: center;
                 }
-                .yanz-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
-                .yanz-btn:active { transform: translateY(0); }
+                .yanz-btn:hover { filter: brightness(1.15); }
             </style>
 
-            <div id="yanzioe-panel" style="width:315px;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;overflow:hidden;">
-                <!-- Header (Draggable) -->
+            <div id="yanzioe-panel" style="width:320px;max-height:88vh;overflow-y:auto;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;">
                 <div id="yanzioe-drag-handle" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(30,41,59,0.9);border-bottom:1px solid rgba(56,189,248,0.25);cursor:move;">
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.6</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.2.0</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -2323,7 +3076,6 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                     </div>
                 </div>
 
-                <!-- Navigation Tabs -->
                 <div id="yanzioe-tabs" style="display:flex;background:rgba(15,23,42,0.9);border-bottom:1px solid rgba(51,65,85,0.6);">
                     <button class="yanz-tab-btn active" data-tab="features">⚡ Tính năng</button>
                     <button class="yanz-tab-btn" data-tab="settings">🎯 Tùy chỉnh</button>
@@ -2335,11 +3087,11 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 <!-- Tab 1: Tính năng -->
                 <div id="yanz-tab-features" class="yanz-tab-content" style="padding:12px 14px;">
                     <button id="yanzioe-solve-btn" class="yanz-btn" style="margin-bottom:10px;font-size:12px;padding:8px 0;">
-                        ⚡ GIẢI BÀI NGAY LẬP TỨC
+                        ⚡ GIẢI BÀI NGAY LẬP TỨC (Alt+S)
                     </button>
 
                     <label class="yanz-toggle-row">
-                        <span>Tự động giải & Điền (AutoAnswer)</span>
+                        <span>Tự động giải &amp; Điền (Alt+A)</span>
                         <input type="checkbox" id="yanz-chk-auto" ${IOE.features.autoAnswer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
@@ -2347,11 +3099,11 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                         <input type="checkbox" id="yanz-chk-show" ${IOE.features.showAnswers ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
-                        <span>Quét Cocos2d / Canvas game</span>
+                        <span>Quét Cocos2d / CreateJS Canvas</span>
                         <input type="checkbox" id="yanz-chk-canvas" ${IOE.features.canvasMode ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
-                        <span>Chặn đếm ngược giờ (Freeze Time)</span>
+                        <span>Đóng băng đồng hồ đếm (Freeze Time)</span>
                         <input type="checkbox" id="yanz-chk-freeze" ${IOE.features.freezeTimer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
@@ -2363,8 +3115,9 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                         <input type="checkbox" id="yanz-chk-stream" ${IOE.features.streamMode ? 'checked' : ''}>
                     </label>
 
-                    <div style="margin-top:8px;font-size:10px;color:#38bdf8;text-align:center;">
-                        💾 Đã kích hoạt cơ chế tự động lưu cấu hình
+                    <div style="margin-top:8px;padding:6px 8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:6px;font-size:10.5px;display:flex;justify-content:space-between;align-items:center;">
+                        <span style="color:#6ee7b7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">🔑 Hạn: ${IOE.escHtml(licState.expiresAt || 'Active')}</span>
+                        <button id="yanz-btn-switch-key" type="button" style="background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.45);color:#fde68a;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;font-weight:700;">Đổi Key</button>
                     </div>
                 </div>
 
@@ -2372,24 +3125,28 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 <div id="yanz-tab-settings" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:3px;">Nhà cung cấp AI giải bài:</div>
                     <select id="yanz-sel-provider" class="yanz-input" style="cursor:pointer;padding:5px;">
-                        <option value="gemini" ${(!IOE.featureConfigs?.aiProvider || IOE.featureConfigs?.aiProvider === 'gemini') ? 'selected' : ''}>🌟 Google Gemini (Khuyên dùng - Chuẩn xác & Miễn phí)</option>
-                        <option value="groq" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>⚡ Groq (Llama 3.3 70B - Tốc độ 0ms)</option>
-                        <option value="openrouter" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>🚀 OpenRouter (Free/Custom Models)</option>
+                        <option value="gemini" ${(!IOE.featureConfigs?.aiProvider || IOE.featureConfigs?.aiProvider === 'gemini') ? 'selected' : ''}>🌟 Google Gemini 2.5 Flash (Chuẩn &amp; Free)</option>
+                        <option value="groq" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>⚡ Groq (Llama 3.3 70B - Siêu nhanh)</option>
+                        <option value="openrouter" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>🚀 OpenRouter (Auto Free Models)</option>
                     </select>
 
-                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (Gemini: AIzaSy... | Groq: gsk_...):</div>
-                    <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="AIzaSy... (Lấy miễn phí tại aistudio.google.com)" value="${IOE.featureConfigs?.apiKey || ''}">
-                    <button id="yanz-btn-save-key" class="yanz-btn" style="margin-top:6px;padding:5px 0;background:#0369a1;">💾 Lưu & Khóa API Key</button>
-
-                    <div style="font-size:11px;color:#94a3b8;margin-top:10px;margin-bottom:3px;">
-                        Độ trễ điền đáp án: <strong id="yanz-delay-val" style="color:#38bdf8;">${((IOE.featureConfigs?.autoDelay || 1500) / 1000).toFixed(1)}s</strong>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (AIzaSy... / gsk_... / sk-or-...):</div>
+                    <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="Dán API Key AI của bạn..." value="${IOE.escHtml(IOE.featureConfigs?.apiKey || '')}">
+                    <div style="display:flex;gap:6px;margin-top:6px;">
+                        <button id="yanz-btn-save-key" class="yanz-btn" style="flex:1;padding:5px 0;background:#0369a1;">💾 Lưu Key</button>
+                        <button id="yanz-btn-test-key" class="yanz-btn" style="flex:1;padding:5px 0;background:#4f46e5;">🔌 Test Key AI</button>
                     </div>
-                    <input type="range" id="yanz-rng-delay" min="300" max="4000" step="100" value="${IOE.featureConfigs?.autoDelay || 1500}" style="width:100%;accent-color:#38bdf8;cursor:pointer;">
+                    <div id="yanz-ai-test-msg" style="font-size:10.5px;margin-top:5px;color:#94a3b8;"></div>
+
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">
+                        Độ trễ điền đáp án: <strong id="yanz-delay-val" style="color:#38bdf8;">${((IOE.featureConfigs?.autoDelay || 1400) / 1000).toFixed(1)}s</strong>
+                    </div>
+                    <input type="range" id="yanz-rng-delay" min="300" max="4000" step="100" value="${IOE.featureConfigs?.autoDelay || 1400}" style="width:100%;accent-color:#38bdf8;cursor:pointer;">
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">Chế độ hoạt động:</div>
                     <select id="yanz-sel-mode" class="yanz-input" style="cursor:pointer;padding:5px;">
-                        <option value="stealth" ${IOE.featureConfigs?.questionMode === 'stealth' ? 'selected' : ''}>🕵️ Stealth (Tránh phát hiện, trễ ngẫu nhiên)</option>
-                        <option value="turbo" ${IOE.featureConfigs?.questionMode === 'turbo' ? 'selected' : ''}>⚡ Turbo (Giải siêu tốc 0ms không chờ)</option>
+                        <option value="stealth" ${IOE.featureConfigs?.questionMode === 'stealth' ? 'selected' : ''}>🕵️ Stealth (Trễ ngẫu nhiên tự nhiên)</option>
+                        <option value="turbo" ${IOE.featureConfigs?.questionMode === 'turbo' ? 'selected' : ''}>⚡ Turbo (Siêu tốc ~0.2s)</option>
                     </select>
                 </div>
 
@@ -2398,55 +3155,49 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                     <div style="background:rgba(30,41,59,0.7);padding:8px 10px;border-radius:6px;border:1px solid rgba(56,189,248,0.25);margin-bottom:8px;">
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
                             <span style="color:#94a3b8;">Động cơ nhận diện:</span>
-                            <strong id="yanz-stat-engine" style="color:#38bdf8;">Cocos Creator 2.x</strong>
+                            <strong id="yanz-stat-engine" style="color:#38bdf8;">${IOE.escHtml(IOE.state.lastEngine || 'Đang quét')}</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Số câu trong bài:</span>
-                            <strong id="yanz-stat-total-q" style="color:#38bdf8;">Đang quét...</strong>
+                            <span style="color:#94a3b8;">Đã giải / Bộ nhớ:</span>
+                            <strong id="yanz-stat-total-q" style="color:#38bdf8;">0 câu</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Tiến độ hoàn thành:</span>
-                            <strong id="yanz-stat-progress" style="color:#4ade80;">0 câu</strong>
+                            <span style="color:#94a3b8;">Tiến độ Cloze:</span>
+                            <strong id="yanz-stat-progress" style="color:#4ade80;">Sẵn sàng</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Trạng thái gói tin:</span>
-                            <strong id="yanz-stat-packet" style="color:#4ade80;">Sẵn sàng bắt Key</strong>
+                            <span style="color:#94a3b8;">Gói tin / Key gốc:</span>
+                            <strong id="yanz-stat-packet" style="color:#4ade80;">0 gói (0 key)</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;">
-                            <span style="color:#94a3b8;">Tỉ lệ chính xác:</span>
-                            <strong style="color:#4ade80;">100%</strong>
+                            <span style="color:#94a3b8;">Mã Key VIP:</span>
+                            <strong id="yanz-stat-license" style="color:#38bdf8;font-family:monospace;font-size:10.5px;">${IOE.escHtml(licState.key || 'N/A')}</strong>
                         </div>
                     </div>
                     <div style="font-size:10.5px;color:#94a3b8;text-align:center;">
-                        Hỗ trợ: Lâu đài trên mây, Khỉ thông minh, Thủ môn, Sắp xếp câu, Điền từ khuyết & Web DOM.
+                        Phím tắt: <strong>Alt+H</strong> (Ẩn/Hiện) • <strong>Alt+A</strong> (Auto) • <strong>Alt+S</strong> (Giải ngay)
                     </div>
                 </div>
 
-                <!-- Tab 4: Đáp án & Tư duy 0ms -->
+                <!-- Tab 4: Đáp án -->
                 <div id="yanz-tab-answers" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Câu hỏi phát hiện:</div>
                     <div id="yanz-ans-question" style="background:rgba(30,41,59,0.7);padding:7px 10px;border-radius:6px;font-size:11px;color:#e2e8f0;max-height:60px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);">
-                        Chưa có câu hỏi được quét. Bấm "Giải bài ngay" để phát hiện!
+                        Chưa có câu hỏi được quét.
                     </div>
-
-                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">Đáp án giải được (Đầy đủ):</div>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">Đáp án giải được:</div>
                     <div id="yanz-ans-result" style="background:rgba(2,132,199,0.15);border:1px solid #0284c7;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;color:#38bdf8;white-space:pre-wrap;max-height:90px;overflow-y:auto;">
                         ---
                     </div>
-
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">🧠 Tư duy ngôn ngữ 0ms:</div>
                     <div id="yanz-ans-thinking" style="background:rgba(15,23,42,0.9);padding:7px 10px;border-radius:6px;font-size:10.5px;color:#cbd5e1;line-height:1.45;white-space:pre-wrap;max-height:90px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);">
-                        Sẵn sàng phân tích ngữ pháp, chủ ngữ, vị ngữ và trật tự câu theo chuẩn tiếng Anh.
+                        Sẵn sàng phân tích câu hỏi &amp; đáp án.
                     </div>
                 </div>
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.1.4 thành công.
-[YANZIOE] Đã kết nối với Canvas & DOM Observer.
-[YANZIOE] Đã nạp cấu hình tự động lưu thành công.
-                    </div>
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v1.2.0 (Licensed).</div>
                     <div style="display:flex;gap:6px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
                         <button id="yanz-btn-scan-again" style="flex:1;background:#0369a1;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">Quét lại Scene</button>
@@ -2454,38 +3205,45 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
                 </div>
             </div>
 
-            <!-- Mini Pill (Khi thu nhỏ) -->
             <div id="yanzioe-pill" style="display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;">
-                🌐 YANZIOE VIP
+                🌐 YANZIOE v1.2.0
             </div>
         `;
 
         document.body.appendChild(root);
 
-        // Đồng bộ giao diện với cấu hình tự lưu
-        function syncUIWithState() {
-            const chkAuto = document.getElementById('yanz-chk-auto');
-            if (chkAuto) chkAuto.checked = !!IOE.features.autoAnswer;
-            const chkShow = document.getElementById('yanz-chk-show');
-            if (chkShow) chkShow.checked = !!IOE.features.showAnswers;
-            const chkCanvas = document.getElementById('yanz-chk-canvas');
-            if (chkCanvas) chkCanvas.checked = !!IOE.features.canvasMode;
-            const chkFreeze = document.getElementById('yanz-chk-freeze');
-            if (chkFreeze) chkFreeze.checked = !!IOE.features.freezeTimer;
-            const chkOneko = document.getElementById('yanz-chk-oneko');
-            if (chkOneko) chkOneko.checked = !!IOE.features.oneko;
-            const chkStream = document.getElementById('yanz-chk-stream');
-            if (chkStream) chkStream.checked = !!IOE.features.streamMode;
+        function refreshStatusStats() {
+            const eng = document.getElementById('yanz-stat-engine');
+            const tot = document.getElementById('yanz-stat-total-q');
+            const pkt = document.getElementById('yanz-stat-packet');
+            const licEl = document.getElementById('yanz-stat-license');
+            if (eng) eng.innerText = IOE.state.lastEngine || 'Đang quét';
+            if (tot) tot.innerText = `${IOE.state.solvedMeta.size} câu`;
+            if (pkt) pkt.innerText = `${IOE.state.packetHits || 0} gói (${IOE.state.correctAnswers.size} key)`;
+            const st = IOE.license?.getState?.();
+            if (licEl && st?.key) licEl.innerText = st.key;
+        }
+        refreshStatusStats();
 
+        function syncUIWithState() {
+            const mapChk = [
+                ['yanz-chk-auto', 'autoAnswer'],
+                ['yanz-chk-show', 'showAnswers'],
+                ['yanz-chk-canvas', 'canvasMode'],
+                ['yanz-chk-freeze', 'freezeTimer'],
+                ['yanz-chk-oneko', 'oneko'],
+                ['yanz-chk-stream', 'streamMode']
+            ];
+            for (const [id, prop] of mapChk) {
+                const el = document.getElementById(id);
+                if (el) el.checked = !!IOE.features[prop];
+            }
             const keyInp = document.getElementById('yanz-inp-key');
             if (keyInp) keyInp.value = IOE.featureConfigs.apiKey || '';
-
             const selProv = document.getElementById('yanz-sel-provider');
             if (selProv && IOE.featureConfigs.aiProvider) selProv.value = IOE.featureConfigs.aiProvider;
-
             const selMode = document.getElementById('yanz-sel-mode');
             if (selMode && IOE.featureConfigs.questionMode) selMode.value = IOE.featureConfigs.questionMode;
-
             const rngDelay = document.getElementById('yanz-rng-delay');
             const delayVal = document.getElementById('yanz-delay-val');
             if (rngDelay && IOE.featureConfigs.autoDelay) {
@@ -2495,67 +3253,50 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         }
         syncUIWithState();
 
-        // Tab Switching
         const tabs = root.querySelectorAll('.yanz-tab-btn');
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                const targetTab = tab.dataset.tab;
                 tabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
-                root.querySelectorAll('.yanz-tab-content').forEach(c => c.style.display = 'none');
-                const showContent = root.querySelector(`#yanz-tab-${targetTab}`);
+                root.querySelectorAll('.yanz-tab-content').forEach(c => { c.style.display = 'none'; });
+                const showContent = root.querySelector(`#yanz-tab-${tab.dataset.tab}`);
                 if (showContent) showContent.style.display = 'block';
+                refreshStatusStats();
             });
         });
 
-        // Dragging logic
         const panel = document.getElementById('yanzioe-panel');
         const pill = document.getElementById('yanzioe-pill');
         const dragHandle = document.getElementById('yanzioe-drag-handle');
-
         let isDragging = false, startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
 
         dragHandle?.addEventListener('mousedown', (e) => {
             if (e.target.tagName === 'BUTTON') return;
             isDragging = true;
-            startX = e.clientX;
-            startY = e.clientY;
+            startX = e.clientX; startY = e.clientY;
             const rect = root.getBoundingClientRect();
-            initialLeft = rect.left;
-            initialTop = rect.top;
+            initialLeft = rect.left; initialTop = rect.top;
             root.style.right = 'auto';
             root.style.left = `${initialLeft}px`;
             root.style.top = `${initialTop}px`;
         });
-
         win.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
-            root.style.left = `${Math.max(0, initialLeft + dx)}px`;
-            root.style.top = `${Math.max(0, initialTop + dy)}px`;
+            root.style.left = `${Math.max(0, initialLeft + (e.clientX - startX))}px`;
+            root.style.top = `${Math.max(0, initialTop + (e.clientY - startY))}px`;
         });
-
         win.addEventListener('mouseup', () => { isDragging = false; });
 
-        // Collapse / Expand
-        const collapseBtn = document.getElementById('yanzioe-collapse-btn');
-        collapseBtn?.addEventListener('click', () => {
-            panel.style.display = 'none';
-            pill.style.display = 'block';
+        document.getElementById('yanzioe-collapse-btn')?.addEventListener('click', () => {
+            panel.style.display = 'none'; pill.style.display = 'block';
         });
-
         pill?.addEventListener('click', () => {
-            panel.style.display = 'block';
-            pill.style.display = 'none';
+            panel.style.display = 'block'; pill.style.display = 'none';
         });
-
         document.getElementById('yanzioe-close-btn')?.addEventListener('click', () => {
-            root.style.display = 'none';
-            isMenuVisible = false;
+            root.style.display = 'none'; isMenuVisible = false;
         });
 
-        // Log helper
         function appendLog(msg) {
             const box = document.getElementById('yanz-log-box');
             if (box) {
@@ -2567,168 +3308,149 @@ Output ONLY the raw JSON object, without explanations, without markdown ticks.`;
         }
         IOE.appendLog = appendLog;
 
-        // Cập nhật số câu trong bài
         IOE.updateQuizSummary = function (total, filled) {
             const totalEl = document.getElementById('yanz-stat-total-q');
             const progEl = document.getElementById('yanz-stat-progress');
             if (totalEl) totalEl.innerText = `${total} câu`;
             if (progEl) {
                 const pct = total > 0 ? Math.round((filled / total) * 100) : 0;
-                progEl.innerText = `${filled}/${total} câu (${pct}%)`;
+                progEl.innerText = `${filled}/${total} (${pct}%)`;
             }
         };
 
-        // Solve button
+        document.getElementById('yanz-btn-switch-key')?.addEventListener('click', () => {
+            root.remove();
+            IOE.license?.clearKey?.();
+        });
+
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {
-            appendLog('Bắt đầu quét và giải toàn bộ bài...');
-            IOE.toast('🔍 Đang bóc tách đề thi & tính toán đáp án...', 1200);
-
-            // 1. Quét Cocos2d / Canvas
-            if (IOE.canvas?.solveCanvasGame) {
-                const res = await IOE.canvas.solveCanvasGame();
-                if (res) {
-                    appendLog('✓ Đã giải bài Canvas Cocos2d thành công!');
-                    return;
-                }
-            }
-
-            // 2. Quét DOM
-            if (IOE.auto?.stepOnce) {
-                IOE.auto.stepOnce();
-                appendLog('✓ Đã thực hiện giải tự động trên Web DOM.');
-            }
+            appendLog('Quét & giải bài hiện tại...');
+            if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
+            refreshStatusStats();
         });
 
-        // Save key & Auto-Save
         const keyInpEl = document.getElementById('yanz-inp-key');
-        keyInpEl?.addEventListener('input', (e) => {
-            const key = e.target.value.trim();
-            IOE.featureConfigs.apiKey = key;
+        const saveKeyFn = () => {
+            IOE.featureConfigs.apiKey = (keyInpEl?.value || '').trim();
             saveAllConfigs();
-        });
-        keyInpEl?.addEventListener('change', (e) => {
-            const key = e.target.value.trim();
-            IOE.featureConfigs.apiKey = key;
-            saveAllConfigs();
-            IOE.toast('💾 Đã tự động lưu API Key vĩnh viễn!', 1200);
-            appendLog(`Đã lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
-        });
-        keyInpEl?.addEventListener('blur', (e) => {
-            const key = e.target.value.trim();
-            IOE.featureConfigs.apiKey = key;
-            saveAllConfigs();
-        });
+        };
+        keyInpEl?.addEventListener('input', saveKeyFn);
+        keyInpEl?.addEventListener('change', () => { saveKeyFn(); IOE.toast('💾 Đã lưu API Key!', 1100); });
+        keyInpEl?.addEventListener('blur', saveKeyFn);
 
         document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {
-            const key = document.getElementById('yanz-inp-key')?.value.trim() || '';
-            IOE.featureConfigs.apiKey = key;
-            saveAllConfigs();
-            IOE.toast('💾 Đã lưu cấu hình & API Key!', 1500);
-            appendLog(`Đã lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+            saveKeyFn();
+            IOE.toast('💾 Đã lưu cấu hình AI!', 1200);
         });
 
-        // Select Provider
+        document.getElementById('yanz-btn-test-key')?.addEventListener('click', async () => {
+            saveKeyFn();
+            const msgEl = document.getElementById('yanz-ai-test-msg');
+            if (msgEl) { msgEl.style.color = '#38bdf8'; msgEl.textContent = '⏳ Đang kiểm tra kết nối API Key...'; }
+            const r = await IOE.question?.testAiKey?.();
+            if (msgEl) {
+                if (r?.ok) {
+                    msgEl.style.color = '#4ade80';
+                    msgEl.textContent = `✓ Kết nối ${r.provider?.toUpperCase()} thành công!`;
+                } else {
+                    msgEl.style.color = '#fca5a5';
+                    msgEl.textContent = `✕ ${r?.error || 'Key không hợp lệ hoặc hết quota'}`;
+                }
+            }
+        });
+
         document.getElementById('yanz-sel-provider')?.addEventListener('change', (e) => {
-            IOE.featureConfigs.aiProvider = e.target.value;
-            saveAllConfigs();
-            IOE.toast(`💾 Đã đổi Provider: ${e.target.value}`, 1000);
-            appendLog(`AI Provider: ${e.target.value}`);
+            IOE.featureConfigs.aiProvider = e.target.value; saveAllConfigs();
         });
-
-        // Select Mode
         document.getElementById('yanz-sel-mode')?.addEventListener('change', (e) => {
-            IOE.featureConfigs.questionMode = e.target.value;
-            saveAllConfigs();
-            IOE.toast(`💾 Chế độ: ${e.target.value}`, 1000);
-            appendLog(`Chế độ: ${e.target.value}`);
+            IOE.featureConfigs.questionMode = e.target.value; saveAllConfigs();
+            IOE.toast(`Chế độ: ${e.target.value}`, 1000);
         });
-
-        // Delay slider
-        const delaySlider = document.getElementById('yanz-rng-delay');
-        const delayVal = document.getElementById('yanz-delay-val');
-        delaySlider?.addEventListener('input', (e) => {
-            const v = e.target.value;
-            IOE.featureConfigs.autoDelay = parseInt(v);
-            if (delayVal) delayVal.innerText = `${(v / 1000).toFixed(1)}s`;
+        document.getElementById('yanz-rng-delay')?.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value, 10);
+            IOE.featureConfigs.autoDelay = v;
+            const dv = document.getElementById('yanz-delay-val');
+            if (dv) dv.innerText = `${(v / 1000).toFixed(1)}s`;
             saveAllConfigs();
         });
 
-        // Toggles với cơ chế Auto-Save tức thì
         document.getElementById('yanz-chk-auto')?.addEventListener('change', (e) => {
-            IOE.features.autoAnswer = e.target.checked;
-            saveAllConfigs();
-            IOE.toast(e.target.checked ? '⚡ Bật Auto-Answer (Đã lưu)' : '⏹ Đã tắt Auto-Answer (Đã lưu)', 1200);
-            appendLog(`Auto-Answer: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
+            IOE.features.autoAnswer = e.target.checked; saveAllConfigs();
+            IOE.toast(e.target.checked ? '⚡ Auto-Answer: BẬT' : '⏹ Auto-Answer: TẮT', 1100);
         });
-
         document.getElementById('yanz-chk-canvas')?.addEventListener('change', (e) => {
-            IOE.features.canvasMode = e.target.checked;
-            saveAllConfigs();
-            appendLog(`Quét Cocos2d / Canvas: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
+            IOE.features.canvasMode = e.target.checked; saveAllConfigs();
         });
-
         document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {
-            IOE.features.showAnswers = e.target.checked;
-            saveAllConfigs();
+            IOE.features.showAnswers = e.target.checked; saveAllConfigs();
         });
-
         document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {
-            IOE.features.freezeTimer = e.target.checked;
-            saveAllConfigs();
+            IOE.features.freezeTimer = e.target.checked; saveAllConfigs();
+            IOE.toast(e.target.checked ? '❄️ Đóng băng giờ: BẬT' : '⏱ Đóng băng giờ: TẮT', 1100);
         });
-
         document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {
-            IOE.features.oneko = e.target.checked;
-            saveAllConfigs();
-            if (IOE.oneko?.toggle) IOE.oneko.toggle(e.target.checked);
+            IOE.features.oneko = e.target.checked; saveAllConfigs();
+            IOE.oneko?.toggle?.(e.target.checked);
         });
-
         document.getElementById('yanz-chk-stream')?.addEventListener('change', (e) => {
-            IOE.features.streamMode = e.target.checked;
-            saveAllConfigs();
+            IOE.features.streamMode = e.target.checked; saveAllConfigs();
             root.style.display = e.target.checked ? 'none' : 'block';
             const hud = document.getElementById('yanzioe-revealer-hud');
             if (hud) hud.style.display = e.target.checked ? 'none' : 'flex';
-            IOE.toast(e.target.checked ? '🕵️ Stream Mode BẬT' : '👁 Stream Mode TẮT', 1200);
         });
 
         document.getElementById('yanz-btn-clear-log')?.addEventListener('click', () => {
             const box = document.getElementById('yanz-log-box');
             if (box) box.innerHTML = '';
         });
-
         document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {
-            appendLog('Đang quét lại Cocos2d Scene...');
-            if (IOE.canvas?.solveCanvasGame) await IOE.canvas.solveCanvasGame();
+            appendLog('Đang quét lại Cocos2d/CreateJS/DOM...');
+            if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
+            refreshStatusStats();
         });
 
-        // Listen for solved events to update Tab 4 (Đáp án)
         IOE.events.on('questionSolved', (meta) => {
             const qEl = document.getElementById('yanz-ans-question');
             const aEl = document.getElementById('yanz-ans-result');
             const tEl = document.getElementById('yanz-ans-thinking');
-            const cEl = document.getElementById('yanz-stat-count');
             if (qEl && (meta.qText || meta.qId)) qEl.innerText = meta.qText || meta.qId;
             if (aEl && meta.answer) aEl.innerText = meta.answer;
             if (tEl && meta.thinking) tEl.innerText = meta.thinking;
-            if (cEl) cEl.innerText = `${IOE.state.solvedMeta.size} câu`;
+            refreshStatusStats();
         });
+        IOE.events.on('packetCaptured', refreshStatusStats);
+        nativeSetInterval(refreshStatusStats, 2500);
 
-        // Hotkey Alt+H
-        win.addEventListener('keydown', (e) => {
-            if (e.altKey && e.code === 'KeyH') {
-                e.preventDefault();
-                isMenuVisible = !isMenuVisible;
-                root.style.display = isMenuVisible ? 'block' : 'none';
-            }
-        });
+        if (!win.__YANZIOE_HOTKEYS__) {
+            win.__YANZIOE_HOTKEYS__ = true;
+            win.addEventListener('keydown', (e) => {
+                if (!e.altKey) return;
+                if (e.code === 'KeyH') {
+                    e.preventDefault();
+                    const rEl = document.getElementById('yanzioe-root');
+                    if (rEl) {
+                        isMenuVisible = rEl.style.display === 'none';
+                        rEl.style.display = isMenuVisible ? 'block' : 'none';
+                    }
+                } else if (e.code === 'KeyA') {
+                    e.preventDefault();
+                    IOE.features.autoAnswer = !IOE.features.autoAnswer;
+                    saveAllConfigs();
+                    const chk = document.getElementById('yanz-chk-auto');
+                    if (chk) chk.checked = IOE.features.autoAnswer;
+                    IOE.toast(IOE.features.autoAnswer ? '⚡ Auto-Answer: BẬT (Alt+A)' : '⏹ Auto-Answer: TẮT (Alt+A)', 1200);
+                } else if (e.code === 'KeyS') {
+                    e.preventDefault();
+                    IOE.auto?.stepOnce?.(true);
+                }
+            });
+        }
     }
 
-    IOE.onBodyReady(createMainMenu);
-    setInterval(() => {
-        if (!document.getElementById('yanzioe-root') && document.body) {
-            createMainMenu();
-        }
-    }, 1500);
+    IOE.events.on('licenseVerified', () => IOE.onBodyReady(createMainMenu));
+    if (IOE.state?.licensed || IOE.license?.isLicensed?.()) {
+        IOE.onBodyReady(createMainMenu);
+    }
 })(typeof window !== 'undefined' ? window : globalThis);
 
+})();

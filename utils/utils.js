@@ -2,6 +2,12 @@
     'use strict';
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
+    /* Capture pristine native timers before Freeze Timer or page scripts alter them */
+    const nativeSetInterval = win.setInterval.bind(win);
+    const nativeClearInterval = win.clearInterval.bind(win);
+    const nativeSetTimeout = win.setTimeout.bind(win);
+    const nativeClearTimeout = win.clearTimeout.bind(win);
+
     class EventEmitter {
         constructor() { this._events = {}; }
         on(e, fn) { (this._events[e] = this._events[e] || []).push(fn); return () => this.off(e, fn); }
@@ -28,7 +34,7 @@
     function toast(msg, duration = 2200) {
         const now = Date.now();
         if (msg === lastToastMsg && (now - lastToastTime) < 2500) {
-            return; // Chặn spam cùng 1 toast trong 2.5s
+            return;
         }
         lastToastMsg = msg;
         lastToastTime = now;
@@ -38,23 +44,22 @@
             if (!box) {
                 box = document.createElement('div');
                 box.id = 'ioe-toast-box';
-                box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:99999999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+                box.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
                 document.body.appendChild(box);
             }
             const el = document.createElement('div');
-            el.style.cssText = 'background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);animation:ioeFade 0.25s ease-out;';
+            el.style.cssText = 'background:rgba(15,23,42,0.94);backdrop-filter:blur(8px);border:1px solid #38bdf8;color:#f8fafc;padding:8px 14px;border-radius:8px;font-size:12.5px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.45);transition:opacity 0.25s ease;';
             el.innerText = msg;
             box.appendChild(el);
-            setTimeout(() => {
+            nativeSetTimeout(() => {
                 el.style.opacity = '0';
-                el.style.transition = 'opacity 0.3s ease';
-                setTimeout(() => el.remove(), 300);
+                nativeSetTimeout(() => el.remove(), 260);
             }, duration);
         });
     }
 
     function delay(ms) {
-        return new Promise(r => setTimeout(r, ms));
+        return new Promise(r => nativeSetTimeout(r, ms));
     }
 
     function escHtml(str) {
@@ -69,17 +74,17 @@
     async function requestExternal(url, options = {}) {
         const { method = 'GET', headers = {}, body = undefined, timeoutMs = 15000, responseType = 'text' } = options;
 
-        // Channel 1: Extension MV3 Background Bridge (zero CSP restrictions)
+        // Channel 1: Extension MV3 Background Bridge (zero CSP/CORS restrictions)
         if (document.documentElement?.dataset?.ioeBridge === '1') {
             const bridgeRes = await new Promise((resolve) => {
                 const id = 'ioeb_' + Math.random().toString(36).slice(2) + Date.now();
-                const timer = setTimeout(() => {
+                const timer = nativeSetTimeout(() => {
                     window.removeEventListener('message', onMsg);
                     resolve(null);
                 }, timeoutMs);
                 function onMsg(ev) {
                     if (ev.source !== window || ev.data?.type !== 'IOE_BRIDGE_FETCH_RES' || ev.data?.id !== id) return;
-                    clearTimeout(timer);
+                    nativeClearTimeout(timer);
                     window.removeEventListener('message', onMsg);
                     resolve(ev.data.payload);
                 }
@@ -91,7 +96,6 @@
                 }, '*');
             });
             if (bridgeRes) {
-                if (bridgeRes.error) throw new Error(bridgeRes.error);
                 return bridgeRes;
             }
         }
@@ -120,7 +124,7 @@
 
         // Channel 3: Native fetch fallback
         const ctrl = new AbortController();
-        const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+        const tm = nativeSetTimeout(() => ctrl.abort(), timeoutMs);
         try {
             const r = await fetch(url, { method, headers, body, signal: ctrl.signal });
             let text = '';
@@ -130,23 +134,38 @@
         } catch (err) {
             return { ok: false, status: 0, error: err?.message || String(err) };
         } finally {
-            clearTimeout(tm);
+            nativeClearTimeout(tm);
         }
     }
 
+    if (document.documentElement) {
+        document.documentElement.dataset.ioeMainLoaded = '1';
+    }
+
     const ioeState = {
+        version: '1.2.0',
         events,
         toast,
         delay,
         escHtml,
         onBodyReady,
+        timers: {
+            setInterval: nativeSetInterval,
+            clearInterval: nativeClearInterval,
+            setTimeout: nativeSetTimeout,
+            clearTimeout: nativeClearTimeout
+        },
         net: { requestExternal },
         state: {
+            licensed: false,
             isSolving: false,
             currentQuestionId: null,
+            packetHits: 0,
+            lastEngine: 'Đang quét...',
             questions: new Map(),
             solvedMeta: new Map(),
-            correctAnswers: new Map()
+            correctAnswers: new Map(),
+            clozeAnswers: {}
         },
         features: {
             autoAnswer: true,
@@ -166,7 +185,8 @@
                 } catch (e) {}
                 return '';
             })(),
-            autoDelay: 1500,
+            aiProvider: 'gemini',
+            autoDelay: 1400,
             questionMode: 'stealth'
         }
     };

@@ -4,34 +4,21 @@
     const IOE = win.IOE || global.IOE;
     if (!IOE) return;
 
+    const nativeSetInterval = IOE.timers?.setInterval || win.setInterval.bind(win);
     let isMenuVisible = true;
-    let isCollapsed = false;
-    let activeTab = 'features';
-
     const STORAGE_KEY = 'YANZIOE_CONFIG_VIP_V1';
 
     function loadSavedConfig() {
         let bestKey = '';
         try {
-            // Quét tất cả các kho lưu trữ tiềm năng để tìm API key còn lưu
             const candidates = [
                 IOE.featureConfigs?.apiKey,
                 localStorage.getItem('IOE_API_KEY'),
                 localStorage.getItem('YANZIOE_API_KEY'),
-                (function () {
-                    try { return sessionStorage.getItem('IOE_API_KEY') || sessionStorage.getItem('YANZIOE_API_KEY'); } catch (e) { return ''; }
-                })(),
-                (function () {
-                    try {
-                        const wn = JSON.parse(window.name || '{}');
-                        return wn.IOE_API_KEY || wn.apiKey || '';
-                    } catch (e) { return ''; }
-                })(),
-                (function () {
-                    const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || '');
-                    return m ? decodeURIComponent(m[1]) : '';
-                })(),
-                (typeof GM_getValue !== 'undefined' ? GM_getValue('IOE_API_KEY') : '')
+                (function () { try { return sessionStorage.getItem('IOE_API_KEY') || sessionStorage.getItem('YANZIOE_API_KEY'); } catch (e) { return ''; } })(),
+                (function () { try { const wn = JSON.parse(window.name || '{}'); return wn.IOE_API_KEY || wn.apiKey || ''; } catch (e) { return ''; } })(),
+                (function () { const m = /IOE_API_KEY=([^;]+)/.exec(document.cookie || ''); return m ? decodeURIComponent(m[1]) : ''; })(),
+                (typeof GM_getValue === 'function' ? GM_getValue('IOE_API_KEY') : '')
             ];
             for (const c of candidates) {
                 if (c && typeof c === 'string' && c.trim().length > 5) {
@@ -46,19 +33,14 @@
                 if (parsed.features) Object.assign(IOE.features, parsed.features);
                 if (parsed.configs) {
                     const savedApiKey = parsed.configs.apiKey;
-                    delete parsed.configs.apiKey; // Không để chuỗi rỗng ghi đè key hợp lệ
+                    delete parsed.configs.apiKey;
                     Object.assign(IOE.featureConfigs, parsed.configs);
-                    if (savedApiKey && savedApiKey.trim().length > 5 && !bestKey) {
-                        bestKey = savedApiKey.trim();
-                    }
+                    if (savedApiKey && savedApiKey.trim().length > 5 && !bestKey) bestKey = savedApiKey.trim();
                 }
             }
         } catch (e) {}
 
-        if (bestKey) {
-            IOE.featureConfigs.apiKey = bestKey;
-        }
-        return null;
+        if (bestKey) IOE.featureConfigs.apiKey = bestKey;
     }
 
     function saveAllConfigs() {
@@ -73,35 +55,28 @@
             if (key) {
                 localStorage.setItem('IOE_API_KEY', key);
                 localStorage.setItem('YANZIOE_API_KEY', key);
+                try { sessionStorage.setItem('IOE_API_KEY', key); } catch (e) {}
                 try {
-                    sessionStorage.setItem('IOE_API_KEY', key);
-                    sessionStorage.setItem('YANZIOE_API_KEY', key);
+                    let wn = {}; try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
+                    wn.IOE_API_KEY = key; window.name = JSON.stringify(wn);
                 } catch (e) {}
-                try {
-                    let wn = {};
-                    try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
-                    wn.IOE_API_KEY = key;
-                    window.name = JSON.stringify(wn);
-                } catch (e) {}
-                try {
-                    document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`;
-                } catch (e) {}
-                if (typeof GM_setValue !== 'undefined') {
-                    try { GM_setValue('IOE_API_KEY', key); } catch (e) {}
-                }
+                try { document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`; } catch (e) {}
+                if (typeof GM_setValue === 'function') { try { GM_setValue('IOE_API_KEY', key); } catch (e) {} }
             }
         } catch (e) {}
     }
 
-    // Tải cấu hình đã lưu ngay khi khởi động
     loadSavedConfig();
 
     function createMainMenu() {
+        if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return;
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
         const root = document.createElement('div');
         root.id = 'yanzioe-root';
         root.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;pointer-events:auto;user-select:none;';
+
+        const licState = IOE.license?.getState?.() || {};
 
         root.innerHTML = `
             <style>
@@ -114,12 +89,9 @@
                 .yanz-rgb-text { animation: ioeRgb 4s linear infinite; }
                 .yanz-tab-btn {
                     flex: 1; padding: 7px 0; background: transparent; border: none; border-bottom: 2px solid transparent;
-                    color: #94a3b8; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s ease;
-                    text-align: center;
+                    color: #94a3b8; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; text-align: center;
                 }
-                .yanz-tab-btn.active {
-                    color: #38bdf8; border-bottom: 2px solid #38bdf8; background: rgba(56,189,248,0.08);
-                }
+                .yanz-tab-btn.active { color: #38bdf8; border-bottom: 2px solid #38bdf8; background: rgba(56,189,248,0.08); }
                 .yanz-tab-btn:hover { color: #f8fafc; }
                 .yanz-toggle-row {
                     display: flex; align-items: center; justify-content: space-between;
@@ -139,17 +111,15 @@
                     cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 10px rgba(2,132,199,0.35);
                     width: 100%; text-align: center;
                 }
-                .yanz-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
-                .yanz-btn:active { transform: translateY(0); }
+                .yanz-btn:hover { filter: brightness(1.15); }
             </style>
 
-            <div id="yanzioe-panel" style="width:315px;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;overflow:hidden;">
-                <!-- Header (Draggable) -->
+            <div id="yanzioe-panel" style="width:320px;max-height:88vh;overflow-y:auto;background:rgba(15,23,42,0.96);backdrop-filter:blur(16px);border:1px solid rgba(56,189,248,0.45);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.65);color:#f8fafc;">
                 <div id="yanzioe-drag-handle" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(30,41,59,0.9);border-bottom:1px solid rgba(56,189,248,0.25);cursor:move;">
                     <div style="display:flex;align-items:center;gap:7px;">
                         <span style="font-size:16px;">🌐</span>
                         <strong class="yanz-rgb-text" style="font-size:13.5px;letter-spacing:0.5px;">YANZIOE VIP</strong>
-                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.1.6</span>
+                        <span style="background:linear-gradient(135deg,#0284c7,#3b82f6);color:#fff;font-size:9px;padding:1.5px 5px;border-radius:4px;font-weight:800;">v1.2.0</span>
                     </div>
                     <div style="display:flex;align-items:center;gap:5px;">
                         <button id="yanzioe-collapse-btn" style="background:rgba(51,65,85,0.7);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Thu nhỏ ▲</button>
@@ -157,7 +127,6 @@
                     </div>
                 </div>
 
-                <!-- Navigation Tabs -->
                 <div id="yanzioe-tabs" style="display:flex;background:rgba(15,23,42,0.9);border-bottom:1px solid rgba(51,65,85,0.6);">
                     <button class="yanz-tab-btn active" data-tab="features">⚡ Tính năng</button>
                     <button class="yanz-tab-btn" data-tab="settings">🎯 Tùy chỉnh</button>
@@ -169,11 +138,11 @@
                 <!-- Tab 1: Tính năng -->
                 <div id="yanz-tab-features" class="yanz-tab-content" style="padding:12px 14px;">
                     <button id="yanzioe-solve-btn" class="yanz-btn" style="margin-bottom:10px;font-size:12px;padding:8px 0;">
-                        ⚡ GIẢI BÀI NGAY LẬP TỨC
+                        ⚡ GIẢI BÀI NGAY LẬP TỨC (Alt+S)
                     </button>
 
                     <label class="yanz-toggle-row">
-                        <span>Tự động giải & Điền (AutoAnswer)</span>
+                        <span>Tự động giải &amp; Điền (Alt+A)</span>
                         <input type="checkbox" id="yanz-chk-auto" ${IOE.features.autoAnswer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
@@ -181,11 +150,11 @@
                         <input type="checkbox" id="yanz-chk-show" ${IOE.features.showAnswers ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
-                        <span>Quét Cocos2d / Canvas game</span>
+                        <span>Quét Cocos2d / CreateJS Canvas</span>
                         <input type="checkbox" id="yanz-chk-canvas" ${IOE.features.canvasMode ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
-                        <span>Chặn đếm ngược giờ (Freeze Time)</span>
+                        <span>Đóng băng đồng hồ đếm (Freeze Time)</span>
                         <input type="checkbox" id="yanz-chk-freeze" ${IOE.features.freezeTimer ? 'checked' : ''}>
                     </label>
                     <label class="yanz-toggle-row">
@@ -197,8 +166,9 @@
                         <input type="checkbox" id="yanz-chk-stream" ${IOE.features.streamMode ? 'checked' : ''}>
                     </label>
 
-                    <div style="margin-top:8px;font-size:10px;color:#38bdf8;text-align:center;">
-                        💾 Đã kích hoạt cơ chế tự động lưu cấu hình
+                    <div style="margin-top:8px;padding:6px 8px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:6px;font-size:10.5px;display:flex;justify-content:space-between;align-items:center;">
+                        <span style="color:#6ee7b7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">🔑 Hạn: ${IOE.escHtml(licState.expiresAt || 'Active')}</span>
+                        <button id="yanz-btn-switch-key" type="button" style="background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.45);color:#fde68a;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;font-weight:700;">Đổi Key</button>
                     </div>
                 </div>
 
@@ -206,24 +176,28 @@
                 <div id="yanz-tab-settings" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:3px;">Nhà cung cấp AI giải bài:</div>
                     <select id="yanz-sel-provider" class="yanz-input" style="cursor:pointer;padding:5px;">
-                        <option value="gemini" ${(!IOE.featureConfigs?.aiProvider || IOE.featureConfigs?.aiProvider === 'gemini') ? 'selected' : ''}>🌟 Google Gemini (Khuyên dùng - Chuẩn xác & Miễn phí)</option>
-                        <option value="groq" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>⚡ Groq (Llama 3.3 70B - Tốc độ 0ms)</option>
-                        <option value="openrouter" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>🚀 OpenRouter (Free/Custom Models)</option>
+                        <option value="gemini" ${(!IOE.featureConfigs?.aiProvider || IOE.featureConfigs?.aiProvider === 'gemini') ? 'selected' : ''}>🌟 Google Gemini 2.5 Flash (Chuẩn &amp; Free)</option>
+                        <option value="groq" ${IOE.featureConfigs?.aiProvider === 'groq' ? 'selected' : ''}>⚡ Groq (Llama 3.3 70B - Siêu nhanh)</option>
+                        <option value="openrouter" ${IOE.featureConfigs?.aiProvider === 'openrouter' ? 'selected' : ''}>🚀 OpenRouter (Auto Free Models)</option>
                     </select>
 
-                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (Gemini: AIzaSy... | Groq: gsk_...):</div>
-                    <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="AIzaSy... (Lấy miễn phí tại aistudio.google.com)" value="${IOE.featureConfigs?.apiKey || ''}">
-                    <button id="yanz-btn-save-key" class="yanz-btn" style="margin-top:6px;padding:5px 0;background:#0369a1;">💾 Lưu & Khóa API Key</button>
-
-                    <div style="font-size:11px;color:#94a3b8;margin-top:10px;margin-bottom:3px;">
-                        Độ trễ điền đáp án: <strong id="yanz-delay-val" style="color:#38bdf8;">${((IOE.featureConfigs?.autoDelay || 1500) / 1000).toFixed(1)}s</strong>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">API Key (AIzaSy... / gsk_... / sk-or-...):</div>
+                    <input type="password" id="yanz-inp-key" class="yanz-input" placeholder="Dán API Key AI của bạn..." value="${IOE.escHtml(IOE.featureConfigs?.apiKey || '')}">
+                    <div style="display:flex;gap:6px;margin-top:6px;">
+                        <button id="yanz-btn-save-key" class="yanz-btn" style="flex:1;padding:5px 0;background:#0369a1;">💾 Lưu Key</button>
+                        <button id="yanz-btn-test-key" class="yanz-btn" style="flex:1;padding:5px 0;background:#4f46e5;">🔌 Test Key AI</button>
                     </div>
-                    <input type="range" id="yanz-rng-delay" min="300" max="4000" step="100" value="${IOE.featureConfigs?.autoDelay || 1500}" style="width:100%;accent-color:#38bdf8;cursor:pointer;">
+                    <div id="yanz-ai-test-msg" style="font-size:10.5px;margin-top:5px;color:#94a3b8;"></div>
+
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">
+                        Độ trễ điền đáp án: <strong id="yanz-delay-val" style="color:#38bdf8;">${((IOE.featureConfigs?.autoDelay || 1400) / 1000).toFixed(1)}s</strong>
+                    </div>
+                    <input type="range" id="yanz-rng-delay" min="300" max="4000" step="100" value="${IOE.featureConfigs?.autoDelay || 1400}" style="width:100%;accent-color:#38bdf8;cursor:pointer;">
 
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:3px;">Chế độ hoạt động:</div>
                     <select id="yanz-sel-mode" class="yanz-input" style="cursor:pointer;padding:5px;">
-                        <option value="stealth" ${IOE.featureConfigs?.questionMode === 'stealth' ? 'selected' : ''}>🕵️ Stealth (Tránh phát hiện, trễ ngẫu nhiên)</option>
-                        <option value="turbo" ${IOE.featureConfigs?.questionMode === 'turbo' ? 'selected' : ''}>⚡ Turbo (Giải siêu tốc 0ms không chờ)</option>
+                        <option value="stealth" ${IOE.featureConfigs?.questionMode === 'stealth' ? 'selected' : ''}>🕵️ Stealth (Trễ ngẫu nhiên tự nhiên)</option>
+                        <option value="turbo" ${IOE.featureConfigs?.questionMode === 'turbo' ? 'selected' : ''}>⚡ Turbo (Siêu tốc ~0.2s)</option>
                     </select>
                 </div>
 
@@ -232,55 +206,49 @@
                     <div style="background:rgba(30,41,59,0.7);padding:8px 10px;border-radius:6px;border:1px solid rgba(56,189,248,0.25);margin-bottom:8px;">
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
                             <span style="color:#94a3b8;">Động cơ nhận diện:</span>
-                            <strong id="yanz-stat-engine" style="color:#38bdf8;">Cocos Creator 2.x</strong>
+                            <strong id="yanz-stat-engine" style="color:#38bdf8;">${IOE.escHtml(IOE.state.lastEngine || 'Đang quét')}</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Số câu trong bài:</span>
-                            <strong id="yanz-stat-total-q" style="color:#38bdf8;">Đang quét...</strong>
+                            <span style="color:#94a3b8;">Đã giải / Bộ nhớ:</span>
+                            <strong id="yanz-stat-total-q" style="color:#38bdf8;">0 câu</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Tiến độ hoàn thành:</span>
-                            <strong id="yanz-stat-progress" style="color:#4ade80;">0 câu</strong>
+                            <span style="color:#94a3b8;">Tiến độ Cloze:</span>
+                            <strong id="yanz-stat-progress" style="color:#4ade80;">Sẵn sàng</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span style="color:#94a3b8;">Trạng thái gói tin:</span>
-                            <strong id="yanz-stat-packet" style="color:#4ade80;">Sẵn sàng bắt Key</strong>
+                            <span style="color:#94a3b8;">Gói tin / Key gốc:</span>
+                            <strong id="yanz-stat-packet" style="color:#4ade80;">0 gói (0 key)</strong>
                         </div>
                         <div style="display:flex;justify-content:space-between;">
-                            <span style="color:#94a3b8;">Tỉ lệ chính xác:</span>
-                            <strong style="color:#4ade80;">100%</strong>
+                            <span style="color:#94a3b8;">Mã Key VIP:</span>
+                            <strong id="yanz-stat-license" style="color:#38bdf8;font-family:monospace;font-size:10.5px;">${IOE.escHtml(licState.key || 'N/A')}</strong>
                         </div>
                     </div>
                     <div style="font-size:10.5px;color:#94a3b8;text-align:center;">
-                        Hỗ trợ: Lâu đài trên mây, Khỉ thông minh, Thủ môn, Sắp xếp câu, Điền từ khuyết & Web DOM.
+                        Phím tắt: <strong>Alt+H</strong> (Ẩn/Hiện) • <strong>Alt+A</strong> (Auto) • <strong>Alt+S</strong> (Giải ngay)
                     </div>
                 </div>
 
-                <!-- Tab 4: Đáp án & Tư duy 0ms -->
+                <!-- Tab 4: Đáp án -->
                 <div id="yanz-tab-answers" class="yanz-tab-content" style="display:none;padding:12px 14px;">
                     <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Câu hỏi phát hiện:</div>
                     <div id="yanz-ans-question" style="background:rgba(30,41,59,0.7);padding:7px 10px;border-radius:6px;font-size:11px;color:#e2e8f0;max-height:60px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);">
-                        Chưa có câu hỏi được quét. Bấm "Giải bài ngay" để phát hiện!
+                        Chưa có câu hỏi được quét.
                     </div>
-
-                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">Đáp án giải được (Đầy đủ):</div>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">Đáp án giải được:</div>
                     <div id="yanz-ans-result" style="background:rgba(2,132,199,0.15);border:1px solid #0284c7;padding:7px 10px;border-radius:6px;font-size:12px;font-weight:700;color:#38bdf8;white-space:pre-wrap;max-height:90px;overflow-y:auto;">
                         ---
                     </div>
-
                     <div style="font-size:11px;color:#94a3b8;margin-top:8px;margin-bottom:4px;">🧠 Tư duy ngôn ngữ 0ms:</div>
                     <div id="yanz-ans-thinking" style="background:rgba(15,23,42,0.9);padding:7px 10px;border-radius:6px;font-size:10.5px;color:#cbd5e1;line-height:1.45;white-space:pre-wrap;max-height:90px;overflow-y:auto;border:1px solid rgba(51,65,85,0.7);">
-                        Sẵn sàng phân tích ngữ pháp, chủ ngữ, vị ngữ và trật tự câu theo chuẩn tiếng Anh.
+                        Sẵn sàng phân tích câu hỏi &amp; đáp án.
                     </div>
                 </div>
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">
-                        [YANZIOE] Khởi động hệ thống v1.1.4 thành công.
-[YANZIOE] Đã kết nối với Canvas & DOM Observer.
-[YANZIOE] Đã nạp cấu hình tự động lưu thành công.
-                    </div>
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v1.2.0 (Licensed).</div>
                     <div style="display:flex;gap:6px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
                         <button id="yanz-btn-scan-again" style="flex:1;background:#0369a1;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">Quét lại Scene</button>
@@ -288,38 +256,45 @@
                 </div>
             </div>
 
-            <!-- Mini Pill (Khi thu nhỏ) -->
             <div id="yanzioe-pill" style="display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;">
-                🌐 YANZIOE VIP
+                🌐 YANZIOE v1.2.0
             </div>
         `;
 
         document.body.appendChild(root);
 
-        // Đồng bộ giao diện với cấu hình tự lưu
-        function syncUIWithState() {
-            const chkAuto = document.getElementById('yanz-chk-auto');
-            if (chkAuto) chkAuto.checked = !!IOE.features.autoAnswer;
-            const chkShow = document.getElementById('yanz-chk-show');
-            if (chkShow) chkShow.checked = !!IOE.features.showAnswers;
-            const chkCanvas = document.getElementById('yanz-chk-canvas');
-            if (chkCanvas) chkCanvas.checked = !!IOE.features.canvasMode;
-            const chkFreeze = document.getElementById('yanz-chk-freeze');
-            if (chkFreeze) chkFreeze.checked = !!IOE.features.freezeTimer;
-            const chkOneko = document.getElementById('yanz-chk-oneko');
-            if (chkOneko) chkOneko.checked = !!IOE.features.oneko;
-            const chkStream = document.getElementById('yanz-chk-stream');
-            if (chkStream) chkStream.checked = !!IOE.features.streamMode;
+        function refreshStatusStats() {
+            const eng = document.getElementById('yanz-stat-engine');
+            const tot = document.getElementById('yanz-stat-total-q');
+            const pkt = document.getElementById('yanz-stat-packet');
+            const licEl = document.getElementById('yanz-stat-license');
+            if (eng) eng.innerText = IOE.state.lastEngine || 'Đang quét';
+            if (tot) tot.innerText = `${IOE.state.solvedMeta.size} câu`;
+            if (pkt) pkt.innerText = `${IOE.state.packetHits || 0} gói (${IOE.state.correctAnswers.size} key)`;
+            const st = IOE.license?.getState?.();
+            if (licEl && st?.key) licEl.innerText = st.key;
+        }
+        refreshStatusStats();
 
+        function syncUIWithState() {
+            const mapChk = [
+                ['yanz-chk-auto', 'autoAnswer'],
+                ['yanz-chk-show', 'showAnswers'],
+                ['yanz-chk-canvas', 'canvasMode'],
+                ['yanz-chk-freeze', 'freezeTimer'],
+                ['yanz-chk-oneko', 'oneko'],
+                ['yanz-chk-stream', 'streamMode']
+            ];
+            for (const [id, prop] of mapChk) {
+                const el = document.getElementById(id);
+                if (el) el.checked = !!IOE.features[prop];
+            }
             const keyInp = document.getElementById('yanz-inp-key');
             if (keyInp) keyInp.value = IOE.featureConfigs.apiKey || '';
-
             const selProv = document.getElementById('yanz-sel-provider');
             if (selProv && IOE.featureConfigs.aiProvider) selProv.value = IOE.featureConfigs.aiProvider;
-
             const selMode = document.getElementById('yanz-sel-mode');
             if (selMode && IOE.featureConfigs.questionMode) selMode.value = IOE.featureConfigs.questionMode;
-
             const rngDelay = document.getElementById('yanz-rng-delay');
             const delayVal = document.getElementById('yanz-delay-val');
             if (rngDelay && IOE.featureConfigs.autoDelay) {
@@ -329,67 +304,50 @@
         }
         syncUIWithState();
 
-        // Tab Switching
         const tabs = root.querySelectorAll('.yanz-tab-btn');
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                const targetTab = tab.dataset.tab;
                 tabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
-                root.querySelectorAll('.yanz-tab-content').forEach(c => c.style.display = 'none');
-                const showContent = root.querySelector(`#yanz-tab-${targetTab}`);
+                root.querySelectorAll('.yanz-tab-content').forEach(c => { c.style.display = 'none'; });
+                const showContent = root.querySelector(`#yanz-tab-${tab.dataset.tab}`);
                 if (showContent) showContent.style.display = 'block';
+                refreshStatusStats();
             });
         });
 
-        // Dragging logic
         const panel = document.getElementById('yanzioe-panel');
         const pill = document.getElementById('yanzioe-pill');
         const dragHandle = document.getElementById('yanzioe-drag-handle');
-
         let isDragging = false, startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
 
         dragHandle?.addEventListener('mousedown', (e) => {
             if (e.target.tagName === 'BUTTON') return;
             isDragging = true;
-            startX = e.clientX;
-            startY = e.clientY;
+            startX = e.clientX; startY = e.clientY;
             const rect = root.getBoundingClientRect();
-            initialLeft = rect.left;
-            initialTop = rect.top;
+            initialLeft = rect.left; initialTop = rect.top;
             root.style.right = 'auto';
             root.style.left = `${initialLeft}px`;
             root.style.top = `${initialTop}px`;
         });
-
         win.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
-            root.style.left = `${Math.max(0, initialLeft + dx)}px`;
-            root.style.top = `${Math.max(0, initialTop + dy)}px`;
+            root.style.left = `${Math.max(0, initialLeft + (e.clientX - startX))}px`;
+            root.style.top = `${Math.max(0, initialTop + (e.clientY - startY))}px`;
         });
-
         win.addEventListener('mouseup', () => { isDragging = false; });
 
-        // Collapse / Expand
-        const collapseBtn = document.getElementById('yanzioe-collapse-btn');
-        collapseBtn?.addEventListener('click', () => {
-            panel.style.display = 'none';
-            pill.style.display = 'block';
+        document.getElementById('yanzioe-collapse-btn')?.addEventListener('click', () => {
+            panel.style.display = 'none'; pill.style.display = 'block';
         });
-
         pill?.addEventListener('click', () => {
-            panel.style.display = 'block';
-            pill.style.display = 'none';
+            panel.style.display = 'block'; pill.style.display = 'none';
         });
-
         document.getElementById('yanzioe-close-btn')?.addEventListener('click', () => {
-            root.style.display = 'none';
-            isMenuVisible = false;
+            root.style.display = 'none'; isMenuVisible = false;
         });
 
-        // Log helper
         function appendLog(msg) {
             const box = document.getElementById('yanz-log-box');
             if (box) {
@@ -401,167 +359,147 @@
         }
         IOE.appendLog = appendLog;
 
-        // Cập nhật số câu trong bài
         IOE.updateQuizSummary = function (total, filled) {
             const totalEl = document.getElementById('yanz-stat-total-q');
             const progEl = document.getElementById('yanz-stat-progress');
             if (totalEl) totalEl.innerText = `${total} câu`;
             if (progEl) {
                 const pct = total > 0 ? Math.round((filled / total) * 100) : 0;
-                progEl.innerText = `${filled}/${total} câu (${pct}%)`;
+                progEl.innerText = `${filled}/${total} (${pct}%)`;
             }
         };
 
-        // Solve button
+        document.getElementById('yanz-btn-switch-key')?.addEventListener('click', () => {
+            root.remove();
+            IOE.license?.clearKey?.();
+        });
+
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {
-            appendLog('Bắt đầu quét và giải toàn bộ bài...');
-            IOE.toast('🔍 Đang bóc tách đề thi & tính toán đáp án...', 1200);
-
-            // 1. Quét Cocos2d / Canvas
-            if (IOE.canvas?.solveCanvasGame) {
-                const res = await IOE.canvas.solveCanvasGame();
-                if (res) {
-                    appendLog('✓ Đã giải bài Canvas Cocos2d thành công!');
-                    return;
-                }
-            }
-
-            // 2. Quét DOM
-            if (IOE.auto?.stepOnce) {
-                IOE.auto.stepOnce();
-                appendLog('✓ Đã thực hiện giải tự động trên Web DOM.');
-            }
+            appendLog('Quét & giải bài hiện tại...');
+            if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
+            refreshStatusStats();
         });
 
-        // Save key & Auto-Save
         const keyInpEl = document.getElementById('yanz-inp-key');
-        keyInpEl?.addEventListener('input', (e) => {
-            const key = e.target.value.trim();
-            IOE.featureConfigs.apiKey = key;
+        const saveKeyFn = () => {
+            IOE.featureConfigs.apiKey = (keyInpEl?.value || '').trim();
             saveAllConfigs();
-        });
-        keyInpEl?.addEventListener('change', (e) => {
-            const key = e.target.value.trim();
-            IOE.featureConfigs.apiKey = key;
-            saveAllConfigs();
-            IOE.toast('💾 Đã tự động lưu API Key vĩnh viễn!', 1200);
-            appendLog(`Đã lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
-        });
-        keyInpEl?.addEventListener('blur', (e) => {
-            const key = e.target.value.trim();
-            IOE.featureConfigs.apiKey = key;
-            saveAllConfigs();
-        });
+        };
+        keyInpEl?.addEventListener('input', saveKeyFn);
+        keyInpEl?.addEventListener('change', () => { saveKeyFn(); IOE.toast('💾 Đã lưu API Key!', 1100); });
+        keyInpEl?.addEventListener('blur', saveKeyFn);
 
         document.getElementById('yanz-btn-save-key')?.addEventListener('click', () => {
-            const key = document.getElementById('yanz-inp-key')?.value.trim() || '';
-            IOE.featureConfigs.apiKey = key;
-            saveAllConfigs();
-            IOE.toast('💾 Đã lưu cấu hình & API Key!', 1500);
-            appendLog(`Đã lưu API Key: ${key ? '***' + key.slice(-4) : '(Để trống)'}`);
+            saveKeyFn();
+            IOE.toast('💾 Đã lưu cấu hình AI!', 1200);
         });
 
-        // Select Provider
+        document.getElementById('yanz-btn-test-key')?.addEventListener('click', async () => {
+            saveKeyFn();
+            const msgEl = document.getElementById('yanz-ai-test-msg');
+            if (msgEl) { msgEl.style.color = '#38bdf8'; msgEl.textContent = '⏳ Đang kiểm tra kết nối API Key...'; }
+            const r = await IOE.question?.testAiKey?.();
+            if (msgEl) {
+                if (r?.ok) {
+                    msgEl.style.color = '#4ade80';
+                    msgEl.textContent = `✓ Kết nối ${r.provider?.toUpperCase()} thành công!`;
+                } else {
+                    msgEl.style.color = '#fca5a5';
+                    msgEl.textContent = `✕ ${r?.error || 'Key không hợp lệ hoặc hết quota'}`;
+                }
+            }
+        });
+
         document.getElementById('yanz-sel-provider')?.addEventListener('change', (e) => {
-            IOE.featureConfigs.aiProvider = e.target.value;
-            saveAllConfigs();
-            IOE.toast(`💾 Đã đổi Provider: ${e.target.value}`, 1000);
-            appendLog(`AI Provider: ${e.target.value}`);
+            IOE.featureConfigs.aiProvider = e.target.value; saveAllConfigs();
         });
-
-        // Select Mode
         document.getElementById('yanz-sel-mode')?.addEventListener('change', (e) => {
-            IOE.featureConfigs.questionMode = e.target.value;
-            saveAllConfigs();
-            IOE.toast(`💾 Chế độ: ${e.target.value}`, 1000);
-            appendLog(`Chế độ: ${e.target.value}`);
+            IOE.featureConfigs.questionMode = e.target.value; saveAllConfigs();
+            IOE.toast(`Chế độ: ${e.target.value}`, 1000);
         });
-
-        // Delay slider
-        const delaySlider = document.getElementById('yanz-rng-delay');
-        const delayVal = document.getElementById('yanz-delay-val');
-        delaySlider?.addEventListener('input', (e) => {
-            const v = e.target.value;
-            IOE.featureConfigs.autoDelay = parseInt(v);
-            if (delayVal) delayVal.innerText = `${(v / 1000).toFixed(1)}s`;
+        document.getElementById('yanz-rng-delay')?.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value, 10);
+            IOE.featureConfigs.autoDelay = v;
+            const dv = document.getElementById('yanz-delay-val');
+            if (dv) dv.innerText = `${(v / 1000).toFixed(1)}s`;
             saveAllConfigs();
         });
 
-        // Toggles với cơ chế Auto-Save tức thì
         document.getElementById('yanz-chk-auto')?.addEventListener('change', (e) => {
-            IOE.features.autoAnswer = e.target.checked;
-            saveAllConfigs();
-            IOE.toast(e.target.checked ? '⚡ Bật Auto-Answer (Đã lưu)' : '⏹ Đã tắt Auto-Answer (Đã lưu)', 1200);
-            appendLog(`Auto-Answer: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
+            IOE.features.autoAnswer = e.target.checked; saveAllConfigs();
+            IOE.toast(e.target.checked ? '⚡ Auto-Answer: BẬT' : '⏹ Auto-Answer: TẮT', 1100);
         });
-
         document.getElementById('yanz-chk-canvas')?.addEventListener('change', (e) => {
-            IOE.features.canvasMode = e.target.checked;
-            saveAllConfigs();
-            appendLog(`Quét Cocos2d / Canvas: ${e.target.checked ? 'BẬT' : 'TẮT'}`);
+            IOE.features.canvasMode = e.target.checked; saveAllConfigs();
         });
-
         document.getElementById('yanz-chk-show')?.addEventListener('change', (e) => {
-            IOE.features.showAnswers = e.target.checked;
-            saveAllConfigs();
+            IOE.features.showAnswers = e.target.checked; saveAllConfigs();
         });
-
         document.getElementById('yanz-chk-freeze')?.addEventListener('change', (e) => {
-            IOE.features.freezeTimer = e.target.checked;
-            saveAllConfigs();
+            IOE.features.freezeTimer = e.target.checked; saveAllConfigs();
+            IOE.toast(e.target.checked ? '❄️ Đóng băng giờ: BẬT' : '⏱ Đóng băng giờ: TẮT', 1100);
         });
-
         document.getElementById('yanz-chk-oneko')?.addEventListener('change', (e) => {
-            IOE.features.oneko = e.target.checked;
-            saveAllConfigs();
-            if (IOE.oneko?.toggle) IOE.oneko.toggle(e.target.checked);
+            IOE.features.oneko = e.target.checked; saveAllConfigs();
+            IOE.oneko?.toggle?.(e.target.checked);
         });
-
         document.getElementById('yanz-chk-stream')?.addEventListener('change', (e) => {
-            IOE.features.streamMode = e.target.checked;
-            saveAllConfigs();
+            IOE.features.streamMode = e.target.checked; saveAllConfigs();
             root.style.display = e.target.checked ? 'none' : 'block';
             const hud = document.getElementById('yanzioe-revealer-hud');
             if (hud) hud.style.display = e.target.checked ? 'none' : 'flex';
-            IOE.toast(e.target.checked ? '🕵️ Stream Mode BẬT' : '👁 Stream Mode TẮT', 1200);
         });
 
         document.getElementById('yanz-btn-clear-log')?.addEventListener('click', () => {
             const box = document.getElementById('yanz-log-box');
             if (box) box.innerHTML = '';
         });
-
         document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {
-            appendLog('Đang quét lại Cocos2d Scene...');
-            if (IOE.canvas?.solveCanvasGame) await IOE.canvas.solveCanvasGame();
+            appendLog('Đang quét lại Cocos2d/CreateJS/DOM...');
+            if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
+            refreshStatusStats();
         });
 
-        // Listen for solved events to update Tab 4 (Đáp án)
         IOE.events.on('questionSolved', (meta) => {
             const qEl = document.getElementById('yanz-ans-question');
             const aEl = document.getElementById('yanz-ans-result');
             const tEl = document.getElementById('yanz-ans-thinking');
-            const cEl = document.getElementById('yanz-stat-count');
             if (qEl && (meta.qText || meta.qId)) qEl.innerText = meta.qText || meta.qId;
             if (aEl && meta.answer) aEl.innerText = meta.answer;
             if (tEl && meta.thinking) tEl.innerText = meta.thinking;
-            if (cEl) cEl.innerText = `${IOE.state.solvedMeta.size} câu`;
+            refreshStatusStats();
         });
+        IOE.events.on('packetCaptured', refreshStatusStats);
+        nativeSetInterval(refreshStatusStats, 2500);
 
-        // Hotkey Alt+H
-        win.addEventListener('keydown', (e) => {
-            if (e.altKey && e.code === 'KeyH') {
-                e.preventDefault();
-                isMenuVisible = !isMenuVisible;
-                root.style.display = isMenuVisible ? 'block' : 'none';
-            }
-        });
+        if (!win.__YANZIOE_HOTKEYS__) {
+            win.__YANZIOE_HOTKEYS__ = true;
+            win.addEventListener('keydown', (e) => {
+                if (!e.altKey) return;
+                if (e.code === 'KeyH') {
+                    e.preventDefault();
+                    const rEl = document.getElementById('yanzioe-root');
+                    if (rEl) {
+                        isMenuVisible = rEl.style.display === 'none';
+                        rEl.style.display = isMenuVisible ? 'block' : 'none';
+                    }
+                } else if (e.code === 'KeyA') {
+                    e.preventDefault();
+                    IOE.features.autoAnswer = !IOE.features.autoAnswer;
+                    saveAllConfigs();
+                    const chk = document.getElementById('yanz-chk-auto');
+                    if (chk) chk.checked = IOE.features.autoAnswer;
+                    IOE.toast(IOE.features.autoAnswer ? '⚡ Auto-Answer: BẬT (Alt+A)' : '⏹ Auto-Answer: TẮT (Alt+A)', 1200);
+                } else if (e.code === 'KeyS') {
+                    e.preventDefault();
+                    IOE.auto?.stepOnce?.(true);
+                }
+            });
+        }
     }
 
-    IOE.onBodyReady(createMainMenu);
-    setInterval(() => {
-        if (!document.getElementById('yanzioe-root') && document.body) {
-            createMainMenu();
-        }
-    }, 1500);
+    IOE.events.on('licenseVerified', () => IOE.onBodyReady(createMainMenu));
+    if (IOE.state?.licensed || IOE.license?.isLicensed?.()) {
+        IOE.onBodyReady(createMainMenu);
+    }
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -36,7 +36,7 @@ res = subprocess.run(cmd, capture_output=True, text=True, timeout=15, encoding='
 
 output = res.stdout
 if 'YANZIOE_E2E_PASSED' in output:
-    print("✅ TEST SUCCESS: All 10/10 YANZIOE E2E tests PASSED!")
+    print("✅ TEST SUCCESS: YANZIOE E2E suite PASSED!")
     for line in output.splitlines():
         if '[PASS]' in line or '[FAIL]' in line or 'SUMMARY:' in line:
             clean = line.replace('<span>', '').replace('</span>', '').strip()

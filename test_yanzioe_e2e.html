@@ -62,9 +62,38 @@
 
         async function runTests() {
             try {
+                // Pre-check 0A: Locked before activation
+                const lockedInit = window.IOE.license && !window.IOE.license.isLicensed();
+                const blockedRes = await window.IOE.question.solveQuestion('q_blk', "What is the past tense of 'go'?");
+                const modalPresent = !!document.getElementById('yanzioe-license-modal');
+                log('0A. License Gate locks solver before activation & mounts key modal', lockedInit && blockedRes === null && modalPresent);
+
+                // Pre-check 0B: Pure-JS SHA-512 + Ed25519 verification + fake server JSON rejection
+                const testPk = '3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c';
+                const testMsg = 'YIOE1|YANZ-IOE-TEST|IOE-HW123|00112233445566778899aabbccddeeff|1795400000|2026-12-23';
+                const testSig = 'fb3dff9582462b6d2c5e70978a3bcbb38c78777cfcd354437f1e4af6cf7954654de6c2b31d0bc96fc39fa50d30de65fa09b9206158548c4758e98e32ab8bf306';
+                const badSig = 'ab' + testSig.slice(2);
+                const edGood = window.IOE.license.verifyEd25519(testSig, testMsg, testPk);
+                const edBad = window.IOE.license.verifyEd25519(badSig, testMsg, testPk);
+
+                const origFetch0 = window.fetch;
+                window.fetch = async (u, o) => ({
+                    ok: true, status: 200,
+                    text: async () => JSON.stringify({ valid: true, key: 'YANZ-IOE-FAKE', hwid: 'H1', expires_at: 'Lifetime', ed_sig: badSig, ed_ts: '1' })
+                });
+                const spoofRes = await window.IOE.license.verifyKeyRemote('YANZ-IOE-FAKE');
+                window.fetch = origFetch0;
+                log('0B. Ed25519 verifies valid RFC vector, rejects tampered sig & blocks forged server JSON', edGood === true && edBad === false && spoofRes.ok === false);
+
+                // Unlock session cleanly for functional engine tests
+                window.IOE.state.licensed = true;
+                document.getElementById('yanzioe-license-modal')?.remove();
+                window.IOE.events.emit('licenseVerified', { key: 'YANZ-IOE-E2E', expiresAt: 'Lifetime' });
+                await window.IOE.delay(50);
+
                 // Test 1: Window API
-                const ok1 = !!(window.IOE && window.IOE.question && window.IOE.auto && window.IOE.revealer);
-                log('1. Window.IOE API exports ready (question, auto, revealer, events)', ok1);
+                const ok1 = !!(window.IOE && window.IOE.question && window.IOE.auto && window.IOE.revealer && window.IOE.canvas?.typeIntoCanvas);
+                log('1. Window.IOE API exports ready (question, auto, revealer, canvas.typeIntoCanvas, events)', ok1);
 
                 // Test 2: Main Menu GUI mounted
                 const menuRoot = document.getElementById('yanzioe-root');
@@ -274,10 +303,74 @@
                 const ok19 = aiSolved && aiSolved["1"] === "glowing" && aiSolved["2"] === "explore";
                 log('19. Gemini AI solver accurately maps option letters ("A" -> "glowing") and words to blanks', ok19);
 
+                // Test 20: Regression - random passage with "temperature" must NOT trigger bogus hardcoded Cloze answers
+                window.IOE.state.clozeAnswers = {};
+                window.IOE.featureConfigs.apiKey = '';
+                const nonBankPassage = 'The summer temperature today is very warm around global cities.';
+                const emptyRes = await window.IOE.question.solveClozePassage(nonBankPassage, [{ index: 1, options: ['cold', 'hot', 'blue', 'tall'] }]);
+                log('20. Rejects bogus fake Cloze matches on arbitrary reading passages', !emptyRes || Object.keys(emptyRes).length === 0);
+
+                // Test 21: Cocos2d Hidden Node Exclusion + Sprite Clue Extraction + Exact Option Match
+                let clickedChoice = '';
+                const mkCocosNode = (txt, visible, name = '', spriteName = '') => ({
+                    active: visible,
+                    activeInHierarchy: visible,
+                    opacity: visible ? 255 : 0,
+                    visible: visible,
+                    name,
+                    _string: txt,
+                    children: [],
+                    _components: spriteName ? [{ spriteFrame: { _name: spriteName } }] : [],
+                    emit(ev) { if (ev === 'click') clickedChoice = txt; },
+                    convertToWorldSpaceAR: () => ({ x: 200, y: 200 })
+                });
+                const hiddenOk = mkCocosNode('OK', false, 'hiddenBtn');
+                const optA = mkCocosNode('A. umbrella', true, 'btnOpt1');
+                const optC = mkCocosNode('C. island', true, 'btnOpt2');
+                const stem = mkCocosNode("What do you use in rainy weather? Check image:", true, 'lblQ', 'umbrella.png');
+                window.cc = {
+                    winSize: { width: 960, height: 640 },
+                    Label: function() {},
+                    Sprite: function() {},
+                    director: { getRunningScene: () => ({ active: true, activeInHierarchy: true, children: [hiddenOk, stem, optA, optC] }) }
+                };
+                // Inject Sprite component match cleanly
+                stem.getComponent = (t) => t === window.cc.Sprite ? stem._components[0] : null;
+                const visCheck = window.IOE.canvas.isNodeVisible(hiddenOk) === false && window.IOE.canvas.isNodeVisible(optA) === true;
+                const clues = window.IOE.canvas.extractSceneSpriteClues(window.cc.director.getRunningScene());
+                const exactBtn = window.IOE.canvas.matchCocosButton([optC, optA].map(n => ({ node: n, text: n._string })), 'a');
+                delete window.cc;
+                log('21. Cocos engine ignores invisible nodes, extracts Sprite clues ("umbrella"), & exact-matches "A"', visCheck && clues.includes('umbrella') && exactBtn?.text === 'A. umbrella');
+
+                // Test 22: CreateJS Stage Extraction & Synthetic Click
+                let cjsClicked = '';
+                const cjsStem = { text: "Past tense of 'go'?", visible: true, alpha: 1, x: 100, y: 80 };
+                const cjsBtn = {
+                    name: 'optBtn1', visible: true, alpha: 1, mouseEnabled: true, x: 200, y: 180,
+                    _listeners: { click: [() => {}] },
+                    children: [{ text: 'A. went / gone', visible: true, alpha: 1 }],
+                    dispatchEvent(ev) { if (ev === 'click') cjsClicked = 'A. went / gone'; }
+                };
+                window.exportRoot = { visible: true, alpha: 1, children: [cjsStem, cjsBtn] };
+                const cjsOk = await window.IOE.canvas.solveCreateJSGame();
+                delete window.exportRoot;
+                log('22. CreateJS / Adobe Animate engine solves question & dispatches click', cjsOk === true && cjsClicked === 'A. went / gone' && window.IOE.state.lastEngine === 'CreateJS / Animate');
+
+                // Test 23: Alt+A toggles autoAnswer & Safe Freeze Timer blocks countdown ticks
+                const beforeAuto = window.IOE.features.autoAnswer;
+                window.dispatchEvent(new KeyboardEvent('keydown', { altKey: true, code: 'KeyA' }));
+                const toggledOk = window.IOE.features.autoAnswer === !beforeAuto;
+                let countdownLeft = 60;
+                window.IOE.features.freezeTimer = true;
+                const tId = setInterval(() => { countdownLeft--; /* timer */ }, 950);
+                await new Promise(r => setTimeout(r, 1150));
+                clearInterval(tId);
+                log('23. Alt+A toggles AutoAnswer & Freeze Timer blocks countdown intervals', toggledOk && countdownLeft === 60 && window.IOE.auto.getFreezeTicks() >= 1);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 19;
+                const allPassed = failCount === 0 && passCount >= 25;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
-                log(`\n🎉 SUMMARY: ${passCount}/19 PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
+                log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
                 log('EXCEPTION: ' + err.message, false);
                 document.title = 'YANZIOE_E2E_FAILED';

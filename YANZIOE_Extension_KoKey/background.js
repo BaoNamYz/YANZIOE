@@ -1,5 +1,16 @@
-/* YANZIOE Extension Background Service Worker (CSP-Free Proxy) */
+/* YANZIOE Extension Background Service Worker (CSP-Free Proxy + Cross-Domain Storage) */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.type === 'IOE_STORAGE_GET' && msg.key) {
+        chrome.storage.local.get([msg.key], (items) => {
+            sendResponse({ value: items?.[msg.key] || '' });
+        });
+        return true;
+    }
+    if (msg?.type === 'IOE_STORAGE_SET' && msg.key) {
+        if (msg.value) chrome.storage.local.set({ [msg.key]: String(msg.value) });
+        else chrome.storage.local.remove([msg.key]);
+        return false;
+    }
     if (msg?.type !== 'IOE_FETCH' || !msg.payload?.url) return false;
 
     const { url, method = 'GET', headers = {}, body, responseType = 'text' } = msg.payload;
