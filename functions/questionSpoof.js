@@ -561,11 +561,11 @@
                 "3": "southern",
                 "4": "In spite of",
                 "5": "encounter",
-                "6": "target",
-                "7": "wipe out",
-                "8": "hands",
-                "9": "where",
-                "10": "role"
+                "6": "as",
+                "7": "target",
+                "8": "wipe out",
+                "9": "of",
+                "10": "hands"
             }
         }
     ];
@@ -634,7 +634,7 @@
         if (!passageText) return null;
         const normPassage = passageText.toLowerCase();
 
-        const passageSnippet = normPassage.replace(/[^a-z0-9]/g, '').slice(0, 40);
+        const passageSnippet = normPassage.replace(/<[^>]+>/g, ' ').replace(/[^a-z0-9]/g, '').slice(0, 28);
         if (IOE.state._lastClozeSnippet && IOE.state._lastClozeSnippet !== passageSnippet) {
             IOE.state.clozeAnswers = {};
         }

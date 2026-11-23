@@ -227,7 +227,7 @@
 
     let _devHarnessLicensed = false;
     const ioeState = {
-        version: '1.2.9',
+        version: '1.2.10',
         events,
         toast,
         delay,

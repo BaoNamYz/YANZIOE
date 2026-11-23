@@ -1,4 +1,4 @@
-/* YANZIOE VIP v1.2.9 */
+/* YANZIOE VIP v1.2.10 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const _sym = Symbol.for('yanz.ioe.core');
@@ -236,7 +236,7 @@
 
     let _devHarnessLicensed = false;
     const ioeState = {
-        version: '1.2.9',
+        version: '1.2.10',
         events,
         toast,
         delay,
@@ -1574,11 +1574,11 @@
                 "3": "southern",
                 "4": "In spite of",
                 "5": "encounter",
-                "6": "target",
-                "7": "wipe out",
-                "8": "hands",
-                "9": "where",
-                "10": "role"
+                "6": "as",
+                "7": "target",
+                "8": "wipe out",
+                "9": "of",
+                "10": "hands"
             }
         }
     ];
@@ -1647,7 +1647,7 @@
         if (!passageText) return null;
         const normPassage = passageText.toLowerCase();
 
-        const passageSnippet = normPassage.replace(/[^a-z0-9]/g, '').slice(0, 40);
+        const passageSnippet = normPassage.replace(/<[^>]+>/g, ' ').replace(/[^a-z0-9]/g, '').slice(0, 28);
         if (IOE.state._lastClozeSnippet && IOE.state._lastClozeSnippet !== passageSnippet) {
             IOE.state.clozeAnswers = {};
         }
@@ -2460,6 +2460,7 @@
             if (toggleComp && toggleComp.interactable !== false) {
                 btnComp = toggleComp;
                 toggleComp.isChecked = true;
+                try { toggleComp._updateCheckMark?.(); } catch (e) {}
                 const tEvs = (Array.isArray(toggleComp.checkEvents) && toggleComp.checkEvents.length > 0)
                     ? toggleComp.checkEvents
                     : (Array.isArray(toggleComp.clickEvents) ? toggleComp.clickEvents : []);
@@ -2475,7 +2476,11 @@
                 if (!firedClickEvents && typeof toggleComp.check === 'function') {
                     try { toggleComp.check(); firedClickEvents = true; } catch (e) {}
                 }
-                if (typeof node.emit === 'function') node.emit('toggle', toggleComp);
+                if (typeof node.emit === 'function') {
+                    try { node.emit('toggle', toggleComp); } catch (e) {}
+                }
+                // Stop here for cc.Toggle: emitting 'click' invokes cc.Toggle.toggle() and immediately unchecks it
+                return true;
             }
 
             if (!btnComp) {
@@ -2583,14 +2588,14 @@
     /* ================= 2. CLOZE PASSAGE SOLVER (COCOS2D) ================= */
     async function solveCocosClozePassage(scene) {
         try { IOE.question?.bypassIOESystemAnswers?.(); } catch (e) {}
-        const allTexts = extractCocosTexts(scene);
-        if (allTexts.length === 0) return false;
-
         const { width: W, height: H } = getLogicalCanvasSize();
-        const { clozeComp } = inspectIoeGameComponents(scene);
+        const { gamePlayComp, clozeComp: rawClozeComp } = inspectIoeGameComponents(scene);
+        const clozeComp = rawClozeComp || ((gamePlayComp?.quest?.contentAnswer && gamePlayComp?.quest?.txtQuestion) ? gamePlayComp.quest : null);
+        const allTexts = extractCocosTexts(scene);
+        if (allTexts.length === 0 && !clozeComp) return false;
 
         let passageObj = clozeComp?.txtQuestion
-            ? { text: getNodeText(clozeComp.txtQuestion.node || clozeComp.txtQuestion) || String(clozeComp.questData || '') }
+            ? { text: ((typeof clozeComp.questData === 'string' && clozeComp.questData.trim()) ? clozeComp.questData : getNodeText(clozeComp.txtQuestion.node || clozeComp.txtQuestion)).replace(/<[^>]+>/g, '').trim() }
             : allTexts.find(t => t.text.length > 50 && (/\(\s*\d+\s*\)|_{3,}|\.{3,}/i.test(t.text)));
         if (!passageObj) passageObj = allTexts.find(t => t.text.length > 85 && t.worldY > H * 0.42);
         if (!passageObj || !passageObj.text) return false;
@@ -2600,15 +2605,15 @@
             if (clozeComp?.contentAnswer?.children?.length) {
                 const cRows = [];
                 clozeComp.contentAnswer.children.forEach((rowNode, idx) => {
-                    if (!canTraverseNode(rowNode)) return;
+                    if (!rowNode || rowNode.active === false) return;
                     const cont = (typeof rowNode.getChildByName === 'function' ? rowNode.getChildByName('container') : null) ||
                         (rowNode.children || []).find(ch => /container/i.test(ch.name || '')) || rowNode;
-                    const optNodes = (cont.children || []).filter(canTraverseNode);
+                    const optNodes = (cont.children || []).filter(n => n && n.active !== false);
                     const btns = optNodes.map(n => {
                         const ansTxt = String(n.dataAnswer?.answer || getNodeText(n) || extractCocosTexts(n, 3).map(t => t.text).join(' ')).trim();
                         return { node: n, text: ansTxt, name: n.name || '', worldX: n.x || 0, worldY: n.y || 0 };
                     }).filter(b => b.text);
-                    const rowIdx = optNodes[0]?.dataAnswer?.questIdx || (idx + 1);
+                    const rowIdx = Number(optNodes[0]?.dataAnswer?.questIdx) || (idx + 1);
                     if (btns.length >= 2) cRows.push({ rowNumber: rowIdx, buttons: btns, y: 0 });
                 });
                 if (cRows.length > 0) return cRows.sort((a, b) => a.rowNumber - b.rowNumber);
@@ -2689,20 +2694,42 @@
         const clickedRowNumbers = new Set();
         const recordedAnswers = {};
         let filledCount = 0;
+        let alreadyAllDone = false;
+        const rowDelayMs = IOE.featureConfigs?.questionMode === 'turbo' ? 75 : 150;
 
         async function solveVisibleRows() {
             let stepFilled = 0;
+            let matchedCount = 0;
             const validRows = extractRowsFromScene();
+            const cc = win.cc;
             for (const row of validRows) {
                 const rNum = row.rowNumber;
-                if (clickedRowNumbers.has(rNum)) continue;
                 const targetRaw = fullAnswers[rNum] || fullAnswers[String(rNum)] || '';
                 const targetStr = String(targetRaw).trim();
                 if (!targetStr) continue;
-
                 const targetButton = matchCocosButton(row.buttons, targetStr);
-                if (targetButton) {
+                if (!targetButton) continue;
+                matchedCount++;
+                if (clickedRowNumbers.has(rNum)) continue;
+
+                const tComp = findComp(targetButton.node, cc?.Toggle, 'cc.Toggle');
+                const alreadyRecorded = clozeComp?.results
+                    ? (clozeComp.results[rNum] === targetButton.node && (!tComp || tComp.isChecked))
+                    : false;
+                if (alreadyRecorded) {
+                    clickedRowNumbers.add(rNum);
+                    continue;
+                }
+
+                try {
                     await clickCocosNode(targetButton.node);
+                    if (tComp) {
+                        tComp.isChecked = true;
+                        try { tComp._updateCheckMark?.(); } catch (e) {}
+                    }
+                    if (clozeComp && typeof clozeComp.onHandlerChooseAnswerCross === 'function' && clozeComp.results?.[rNum] !== targetButton.node) {
+                        clozeComp.onHandlerChooseAnswerCross({ target: targetButton.node, currentTarget: targetButton.node });
+                    }
                     clickedRowNumbers.add(rNum);
                     filledCount++;
                     stepFilled++;
@@ -2711,13 +2738,17 @@
                     const cleanBtnTxt = stripOptPrefix(targetButton.text);
                     recordedAnswers[rNum] = chosenLetter ? `${chosenLetter} (${cleanBtnTxt || targetStr})` : (cleanBtnTxt || targetStr);
                     IOE.updateQuizSummary?.(totalBlanks, filledCount);
-                    await IOE.delay?.(220);
-                }
+                    await IOE.delay?.(rowDelayMs);
+                } catch (e) {}
+            }
+            if (matchedCount >= Math.min(totalBlanks, validRows.length) && matchedCount > 0 && stepFilled === 0) {
+                alreadyAllDone = true;
             }
             return stepFilled;
         }
 
-        if (scrollViewComp) {
+        const hasDirectClozeTree = !!(clozeComp?.contentAnswer?.children?.length);
+        if (!hasDirectClozeTree && scrollViewComp) {
             try {
                 if (typeof scrollViewComp.scrollToTop === 'function') scrollViewComp.scrollToTop(0.1);
                 else if (typeof scrollViewComp.scrollToPercentVertical === 'function') scrollViewComp.scrollToPercentVertical(0, 0.1);
@@ -2726,7 +2757,7 @@
         }
         await solveVisibleRows();
 
-        if (filledCount < totalBlanks) {
+        if (!hasDirectClozeTree && !alreadyAllDone && filledCount < totalBlanks) {
             if (scrollViewComp) {
                 try {
                     if (typeof scrollViewComp.scrollToBottom === 'function') scrollViewComp.scrollToBottom(0.15);
@@ -2837,7 +2868,7 @@
         let textComp = null;
         const seen = new WeakSet();
         (function walk(n, d = 0) {
-            if (!n || d > 16 || seen.has(n) || !canTraverseNode(n)) return;
+            if (!n || d > 24 || seen.has(n) || !canTraverseNode(n)) return;
             seen.add(n);
             for (const c of (n._components || [])) {
                 if (!c) continue;

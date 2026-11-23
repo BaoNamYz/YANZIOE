@@ -260,7 +260,7 @@
                 window.IOE.state.clozeAnswers = {};
                 const mockHistoricalPassage = "Gia Long was the (1) emperor of the Nguyen dynasty. Born (2) as Nguyen Phuc Anh, he was the nephew of the last Nguyen lord who ruled over (3) Vietnam. (4) being born into a royal family, he had to (5) many difficulties in his early life.";
                 const histAns = await window.IOE.question.solveClozePassage(mockHistoricalPassage, []);
-                const okHist = histAns && histAns["1"] === "first" && histAns["2"] === "as" && histAns["3"] === "southern" && histAns["4"] === "In spite of" && histAns["5"] === "encounter" && histAns["6"] === "target" && histAns["7"] === "wipe out" && histAns["8"] === "hands" && histAns["9"] === "where" && histAns["10"] === "role";
+                const okHist = histAns && histAns["1"] === "first" && histAns["2"] === "as" && histAns["3"] === "southern" && histAns["4"] === "In spite of" && histAns["5"] === "encounter" && histAns["6"] === "as" && histAns["7"] === "target" && histAns["8"] === "wipe out" && histAns["9"] === "of" && histAns["10"] === "hands";
                 log('17. Solves Gia Long & Nguyen Phuc Anh cloze test with exact historical ground truth', okHist);
 
                 // Test 18: Rejects empty player strings/placeholders ("______", "") and falls back to ground truth
@@ -1016,8 +1016,96 @@
                 log('37. Anti-Tamper seals PK/API anchor, rejects forged state.licensed in strict mode & freezes IOE.license',
                     (tamperThrown || frozenIntact) && frozenIntact && badAnchorRejected && strictUnsealedRejected && liveAnchorAccepted);
 
+                // Test 38: Full 10-row live QuestDoanVanDienTu + real Cocos cc.Toggle (prevents node.emit('click') uncheck & fills all 10 Gia Long rows)
+                const questData38 = "Gia Long was the (1) ___ emperor of the Nguyen dynasty. Born (2) ___ Nguyen Phuc Anh, he was the nephew of the last Nguyen lord who ruled over (3) ___ Vietnam. (4) ___ being born into a royal family, he had to (5) ___ many difficulties in his early life (6) ___ he became the (7) ___ of rival groups who attempted to (8) ___ the Nguyen clan completely. After the deaths (9) ___ his father and uncle at the (10) ___ of the rival leaders.";
+                const rowsOpts38 = [
+                    ['third', 'fourth', 'second', 'first'],
+                    ['at', 'as', 'of', 'to'],
+                    ['northern', 'centre', 'southern', 'central'],
+                    ['In spite of', 'In view of', 'Despite of', 'Because of'],
+                    ['manage', 'face up', 'encounter', 'get by'],
+                    ['as', 'so', 'then', 'during'],
+                    ['aim', 'target', 'goal', 'end'],
+                    ['wipe out', 'take over', 'put off', 'turn down'],
+                    ['by', 'on', 'of', 'for'],
+                    ['palms', 'hands', 'arms', 'fingers']
+                ];
+                function Toggle38() {
+                    this._checked = false;
+                    this.interactable = true;
+                    this.checkMark = { node: { active: false } };
+                    this.checkEvents = [];
+                    this._updateCheckMark = () => { this.checkMark.node.active = !!this._checked; };
+                    Object.defineProperty(this, 'isChecked', {
+                        get: () => this._checked,
+                        set: (v) => { this._checked = !!v; this._updateCheckMark(); }
+                    });
+                    this.uncheck = () => { this.isChecked = false; };
+                }
+                const rich38 = { string: questData38 };
+                const cloze38 = {
+                    questData: questData38,
+                    txtQuestion: { node: { _components: [rich38], activeInHierarchy: true } },
+                    results: [],
+                    contentAnswer: { active: true, activeInHierarchy: true, children: [] },
+                    onHandlerChooseAnswerCross(e) {
+                        const t = e?.target;
+                        if (!t?.dataAnswer) return;
+                        const tc = t.getComponent(Toggle38);
+                        if (tc.isChecked) {
+                            if (this.results[t.dataAnswer.questIdx]) this.results[t.dataAnswer.questIdx].getComponent(Toggle38).uncheck();
+                            this.results[t.dataAnswer.questIdx] = t;
+                        } else {
+                            delete this.results[t.dataAnswer.questIdx];
+                        }
+                        let s = this.questData;
+                        this.results.forEach(item => {
+                            if (item?.dataAnswer) s = s.replace(`(${item.dataAnswer.questIdx}) ___`, `(${item.dataAnswer.questIdx}) <color=f5c62c>${item.dataAnswer.answer}</c>`);
+                        });
+                        rich38.string = s;
+                    }
+                };
+                cloze38.contentAnswer.children = rowsOpts38.map((opts, idx) => {
+                    const rowBtns = opts.map((ans) => {
+                        const tog = new Toggle38();
+                        const listeners = {};
+                        const node = {
+                            name: 'mcCross', active: true, activeInHierarchy: true, visible: true, opacity: 255,
+                            dataAnswer: { questIdx: idx + 1, answer: ans },
+                            _components: [tog], children: [],
+                            on(ev, fn) { listeners[ev] = fn; },
+                            emit(ev, arg) { if (ev === 'click') tog.isChecked = !tog.isChecked; if (listeners[ev]) listeners[ev](arg); },
+                            getComponent(t) { return (t === Toggle38 || t === 'cc.Toggle') ? tog : null; }
+                        };
+                        tog.node = node;
+                        tog.checkEvents = [{ emit(args) { cloze38.onHandlerChooseAnswerCross(args?.[0]); } }];
+                        return node;
+                    });
+                    const cont = { name: 'container', active: true, activeInHierarchy: true, children: rowBtns };
+                    return { name: 'item', active: true, activeInHierarchy: true, children: [cont], getChildByName: (n) => n === 'container' ? cont : null };
+                });
+                window.IOE.state._lastClozeSnippet = '';
+                window.IOE.state.clozeAnswers = { '1': 'first', '2': 'as', '3': 'southern', '4': 'In spite of', '5': 'encounter', '6': 'as', '7': 'target', '8': 'wipe out', '9': 'of', '10': 'hands' };
+                const prevMode38 = window.IOE.featureConfigs.questionMode;
+                window.IOE.featureConfigs.questionMode = 'turbo';
+                window.cc = {
+                    winSize: { width: 1280, height: 720 },
+                    Toggle: Toggle38, RichText: function () {},
+                    Component: { EventHandler: { emitEvents(evs, e) { for (const ev of evs) ev.emit([e]); } } },
+                    director: { getRunningScene: () => ({ active: true, activeInHierarchy: true, children: [{ active: true, activeInHierarchy: true, _components: [cloze38], children: [cloze38.txtQuestion.node, cloze38.contentAnswer] }] }) }
+                };
+                const res38First = await window.IOE.canvas.solveCocosClozePassage(window.cc.director.getRunningScene());
+                const filled38 = cloze38.results.filter(n => n?.getComponent(Toggle38)?.isChecked && n?.getComponent(Toggle38)?.checkMark?.node?.active).length;
+                const allColor38 = rich38.string.includes('(1) <color=f5c62c>first</c>') && rich38.string.includes('(6) <color=f5c62c>as</c>') && rich38.string.includes('(10) <color=f5c62c>hands</c>');
+                const res38Second = await window.IOE.canvas.solveCocosClozePassage(window.cc.director.getRunningScene());
+                delete window.cc;
+                window.IOE.state.clozeAnswers = {};
+                window.IOE.featureConfigs.questionMode = prevMode38;
+                log('38. Fills ALL 10 rows of live QuestDoanVanDienTu with active cc.Toggle checkMarks & stops looping once complete',
+                    res38First === true && filled38 === 10 && allColor38 && res38Second === false);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 39;
+                const allPassed = failCount === 0 && passCount >= 40;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
