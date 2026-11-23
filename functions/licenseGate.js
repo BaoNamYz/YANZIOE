@@ -412,7 +412,7 @@
     }
 
     async function showLicenseModal(statusText = '') {
-        if (licenseState.licensed) return;
+        if (licenseState.licensed || win !== win.top) return;
         const hwid = await getHardwareHwid();
         IOE.onBodyReady(() => {
             if (licenseState.licensed) return;
@@ -512,6 +512,9 @@
     }
 
     async function bootstrapLicenseGate() {
+        if (document.documentElement?.dataset?.ioeBridge !== '1' && typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+            await new Promise(r => setTimeout(r, 85));
+        }
         const hwid = await getHardwareHwid();
         licenseState.hwid = hwid;
 
@@ -553,6 +556,10 @@
         return false;
     }
 
+    IOE.kv = {
+        get: kvGet,
+        set: kvSet
+    };
     IOE.license = {
         getState: () => ({ ...licenseState }),
         isLicensed: () => !!licenseState.licensed,

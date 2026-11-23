@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YANZIOE VIP CoKey VIP - IOE.vn Tool",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Tool tự giải và hiển thị đáp án Olympic Tiếng Anh IOE.vn (Cocos2d, CreateJS & DOM)",
   "background": {
     "service_worker": "background.js"
@@ -13,6 +13,9 @@
         "*://*.ioe.vn/*",
         "*://*.go.vn/*",
         "*://*.vtc.vn/*",
+        "*://*.vtconline.vn/*",
+        "*://vtconline.vn/*",
+        "*://*.goplay.vn/*",
         "*://api-edu.go.vn/*"
       ],
       "js": [
@@ -28,6 +31,9 @@
         "*://*.ioe.vn/*",
         "*://*.go.vn/*",
         "*://*.vtc.vn/*",
+        "*://*.vtconline.vn/*",
+        "*://vtconline.vn/*",
+        "*://*.goplay.vn/*",
         "*://api-edu.go.vn/*"
       ],
       "js": [
@@ -43,6 +49,9 @@
     "*://*.ioe.vn/*",
     "*://*.go.vn/*",
     "*://*.vtc.vn/*",
+    "*://*.vtconline.vn/*",
+    "*://vtconline.vn/*",
+    "*://*.goplay.vn/*",
     "*://api-edu.go.vn/*",
     "https://yanzbnshop.onrender.com/*",
     "https://api.groq.com/*",
@@ -66,6 +75,9 @@
         "*://*.ioe.vn/*",
         "*://*.go.vn/*",
         "*://*.vtc.vn/*",
+        "*://*.vtconline.vn/*",
+        "*://vtconline.vn/*",
+        "*://*.goplay.vn/*",
         "*://api-edu.go.vn/*"
       ]
     }

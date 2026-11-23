@@ -48,16 +48,29 @@
         return { width: 960, height: 640 };
     }
 
-    function isNodeVisible(node) {
+    function canTraverseNode(node) {
         if (!node) return false;
         try {
             if (node.active === false || node.activeInHierarchy === false) return false;
             if (node.visible === false) return false;
             if (typeof node.isVisible === 'function' && !node.isVisible()) return false;
-            if (typeof node.opacity === 'number' && node.opacity <= 8) return false;
-            if (typeof node.getOpacity === 'function' && node.getOpacity() <= 8) return false;
+            if (node.scaleX === 0 || node.scaleY === 0) return false;
         } catch (e) {}
         return true;
+    }
+
+    function isSelfOpaque(node) {
+        if (!node) return false;
+        try {
+            if (typeof node.opacity === 'number' && node.opacity <= 8) return false;
+            if (typeof node.getOpacity === 'function' && node.getOpacity() <= 8) return false;
+            if (node._uiProps && typeof node._uiProps.localOpacity === 'number' && node._uiProps.localOpacity <= 0.03) return false;
+        } catch (e) {}
+        return true;
+    }
+
+    function isNodeVisible(node) {
+        return canTraverseNode(node) && isSelfOpaque(node);
     }
 
     function getNodeText(node) {
@@ -81,8 +94,17 @@
                 if (cc.Label) comp = node.getComponent(cc.Label);
                 if (!comp && cc.RichText) comp = node.getComponent(cc.RichText);
                 if (!comp && cc.EditBox) comp = node.getComponent(cc.EditBox);
-                const s = comp?.string;
+                if (!comp) comp = node.getComponent('cc.Label') || node.getComponent('cc.RichText');
+                const s = comp?.string ?? comp?.text;
                 if (s && typeof s === 'string') return s.replace(/<[^>]+>/g, '').trim();
+            }
+            if (Array.isArray(node._components)) {
+                for (const comp of node._components) {
+                    const s = comp?.string ?? comp?._string ?? comp?.text;
+                    if (s && typeof s === 'string' && s.trim()) {
+                        return s.replace(/<[^>]+>/g, '').trim();
+                    }
+                }
             }
             if (node._string && typeof node._string === 'string') return node._string.trim();
             if (node.string && typeof node.string === 'string') return node.string.trim();
@@ -104,14 +126,16 @@
         return pos;
     }
 
-    function extractCocosTexts(node, maxDepth = 15, curDepth = 0) {
-        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return [];
+    function extractCocosTexts(node, maxDepth = 24, curDepth = 0) {
+        if (!node || curDepth > maxDepth || !canTraverseNode(node)) return [];
         const results = [];
         try {
-            const clean = getNodeText(node);
-            if (clean.length > 0) {
-                const worldPos = getNodeWorldPos(node);
-                results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
+            if (isSelfOpaque(node)) {
+                const clean = getNodeText(node);
+                if (clean.length > 0) {
+                    const worldPos = getNodeWorldPos(node);
+                    results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
+                }
             }
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
             for (const child of children) {
@@ -121,25 +145,27 @@
         return results;
     }
 
-    function extractSceneSpriteClues(node, maxDepth = 12, curDepth = 0, out = []) {
-        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return out;
+    function extractSceneSpriteClues(node, maxDepth = 16, curDepth = 0, out = []) {
+        if (!node || curDepth > maxDepth || !canTraverseNode(node)) return out;
         try {
-            const cc = win.cc;
-            let rawName = '';
-            if (typeof node.getComponent === 'function' && cc?.Sprite) {
-                const sp = node.getComponent(cc.Sprite);
-                rawName = sp?.spriteFrame?._name || sp?._spriteFrame?.name || '';
-            }
-            if (!rawName && node._spriteFrame) {
-                rawName = node._spriteFrame._name || node._spriteFrame.name || '';
-            }
-            if (rawName && typeof rawName === 'string') {
-                const clean = rawName.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim();
-                const lower = clean.toLowerCase();
-                if (clean.length >= 3 && clean.length <= 32 && /[a-z]/i.test(clean) &&
-                    !/^(bg|btn|button|panel|frame|border|icon|bar|box|popup|dialog|mask|cloud|star|coin|heart|sound|audio|close|next|back|ok|start|sprite|default|avatar|logo|arrow|line|dot|check|tick|cross|white|black)/i.test(lower) &&
-                    !out.includes(clean)) {
-                    out.push(clean);
+            if (isSelfOpaque(node)) {
+                const cc = win.cc;
+                let rawName = '';
+                if (typeof node.getComponent === 'function' && cc?.Sprite) {
+                    const sp = node.getComponent(cc.Sprite);
+                    rawName = sp?.spriteFrame?._name || sp?._spriteFrame?.name || '';
+                }
+                if (!rawName && node._spriteFrame) {
+                    rawName = node._spriteFrame._name || node._spriteFrame.name || '';
+                }
+                if (rawName && typeof rawName === 'string') {
+                    const clean = rawName.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim();
+                    const lower = clean.toLowerCase();
+                    if (clean.length >= 3 && clean.length <= 32 && /[a-z]/i.test(clean) &&
+                        !/^(bg|btn|button|panel|frame|border|icon|bar|box|popup|dialog|mask|cloud|star|coin|heart|sound|audio|close|next|back|ok|start|sprite|default|avatar|logo|arrow|line|dot|check|tick|cross|white|black)/i.test(lower) &&
+                        !out.includes(clean)) {
+                        out.push(clean);
+                    }
                 }
             }
             const ch = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -148,22 +174,30 @@
         return out;
     }
 
-    function findCocosClickables(node, maxDepth = 15, curDepth = 0) {
-        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return [];
+    function hasEventListeners(node) {
+        const pools = [node._bubblingListeners, node._capturingListeners, node._eventTarget?._bubblingListeners];
+        for (const pool of pools) {
+            if (pool && typeof pool === 'object' && Object.keys(pool).length > 0) return true;
+        }
+        return false;
+    }
+
+    function findCocosClickables(node, maxDepth = 24, curDepth = 0) {
+        if (!node || curDepth > maxDepth || !canTraverseNode(node)) return [];
         const results = [];
         try {
             const cc = win.cc;
             let isClickable = false;
             let btnComp = null;
 
-            if (typeof node.getComponent === 'function' && cc?.Button) {
-                btnComp = node.getComponent(cc.Button);
-                if (btnComp && btnComp.interactable !== false) isClickable = true;
+            if (typeof node.getComponent === 'function') {
+                btnComp = (cc?.Button && node.getComponent(cc.Button)) || node.getComponent('cc.Button') || null;
+                if (btnComp && btnComp.interactable !== false && btnComp.enabled !== false) isClickable = true;
             }
             if (cc?.MenuItem && node instanceof cc.MenuItem && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
             if (cc?.ui?.Button && node instanceof cc.ui.Button && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
             if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;
-            if (node._hasClickEventListener || node._touchListener || node._touchEnabled) isClickable = true;
+            if (node._hasClickEventListener || node._touchListener || node._touchEnabled || hasEventListeners(node)) isClickable = true;
 
             const name = (node.name || '').toLowerCase();
             if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('word')) {
@@ -171,12 +205,14 @@
             }
 
             if (isClickable) {
-                let txt = getNodeText(node);
+                let txt = isSelfOpaque(node) ? getNodeText(node) : '';
                 if (!txt) {
-                    txt = extractCocosTexts(node, 4).map(t => t.text).join(' ');
+                    txt = extractCocosTexts(node, 5).map(t => t.text).join(' ');
                 }
-                const worldPos = getNodeWorldPos(node);
-                results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name || '' });
+                if (isSelfOpaque(node) || txt.trim() || btnComp) {
+                    const worldPos = getNodeWorldPos(node);
+                    results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name || '' });
+                }
             }
 
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -188,7 +224,7 @@
     }
 
     async function clickCocosNode(node) {
-        if (!node || !isNodeVisible(node)) return false;
+        if (!node || !canTraverseNode(node)) return false;
         try {
             const cc = win.cc;
             const worldPos = getNodeWorldPos(node);
@@ -771,9 +807,9 @@
                     if (cc && cc.EditBox) {
                         const editBoxes = [];
                         (function findEB(n) {
-                            if (!n || !isNodeVisible(n)) return;
+                            if (!n || !canTraverseNode(n)) return;
                             if (typeof n.getComponent === 'function') {
-                                const eb = n.getComponent(cc.EditBox);
+                                const eb = n.getComponent(cc.EditBox) || n.getComponent('cc.EditBox');
                                 if (eb) editBoxes.push({ node: n, comp: eb });
                             }
                             const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
@@ -819,13 +855,30 @@
         return await solveCreateJSGame();
     }
 
+    function getSceneDiagnostics() {
+        const sc = getCocosScene();
+        const texts = sc ? extractCocosTexts(sc) : [];
+        const clicks = sc ? findCocosClickables(sc) : [];
+        return {
+            ccPresent: !!win.cc,
+            sceneFound: !!sc,
+            canvasCount: document.querySelectorAll('canvas').length,
+            cocosTextCount: texts.length,
+            cocosClickableCount: clicks.length,
+            sampleTexts: texts.slice(0, 6).map(t => t.text),
+            createJsRoot: !!(win.exportRoot || win.stage)
+        };
+    }
+
     IOE.canvas = {
         solveCanvasGame,
         solveCocosClozePassage,
         solveCocosWordReordering,
         solveCreateJSGame,
         getCocosScene,
+        canTraverseNode,
         isNodeVisible,
+        getSceneDiagnostics,
         extractCocosTexts,
         extractSceneSpriteClues,
         findCocosClickables,

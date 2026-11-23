@@ -1,4 +1,4 @@
-/* YANZIOE VIP v1.2.0 */
+/* YANZIOE VIP v1.2.1 */
 (function() {
     const _w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     if (_w.__YANZIOE_BOOTED__) return;
@@ -149,7 +149,7 @@
     }
 
     const ioeState = {
-        version: '1.2.0',
+        version: '1.2.1',
         events,
         toast,
         delay,
@@ -617,7 +617,7 @@
     }
 
     async function showLicenseModal(statusText = '') {
-        if (licenseState.licensed) return;
+        if (licenseState.licensed || win !== win.top) return;
         const hwid = await getHardwareHwid();
         IOE.onBodyReady(() => {
             if (licenseState.licensed) return;
@@ -717,6 +717,9 @@
     }
 
     async function bootstrapLicenseGate() {
+        if (document.documentElement?.dataset?.ioeBridge !== '1' && typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+            await new Promise(r => setTimeout(r, 85));
+        }
         const hwid = await getHardwareHwid();
         licenseState.hwid = hwid;
 
@@ -758,6 +761,10 @@
         return false;
     }
 
+    IOE.kv = {
+        get: kvGet,
+        set: kvSet
+    };
     IOE.license = {
         getState: () => ({ ...licenseState }),
         isLicensed: () => !!licenseState.licensed,
@@ -1030,7 +1037,7 @@
     }
 
     async function callGeminiApi(apiKey, prompt, expectJson = true) {
-        const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+        const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
         for (const m of models) {
             try {
                 const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -1039,7 +1046,7 @@
                 const r = await extPostJson(endpoint, { 'Content-Type': 'application/json' }, {
                     contents: [{ parts: [{ text: prompt }] }],
                     generationConfig: genCfg
-                }, 14000);
+                }, 8500);
 
                 if (r && r.ok && r.text) {
                     const j = JSON.parse(r.text);
@@ -1070,7 +1077,7 @@
                 const r = await extPostJson(endpoint, {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${apiKey}`
-                }, bodyObj, 14000);
+                }, bodyObj, 8500);
 
                 if (r && r.ok && r.text) {
                     const j = JSON.parse(r.text);
@@ -1475,6 +1482,7 @@
             return meta;
         } else if (lastAiError) {
             IOE.appendLog?.(`❌ Lỗi AI: ${lastAiError}`);
+            IOE.toast(`⚠️ AI lỗi: ${lastAiError.slice(0, 75)}`, 2800);
         }
 
         return null;
@@ -1503,6 +1511,20 @@
         return null;
     }
 
+    function extractAnswerString(val) {
+        if (val === undefined || val === null) return '';
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return String(val);
+        if (Array.isArray(val)) {
+            const parts = val.map(x => extractAnswerString(x)).filter(Boolean);
+            return parts.join(' ').trim();
+        }
+        if (typeof val === 'object') {
+            const inner = val.tans ?? val.Tans ?? val.content ?? val.Content ?? val.text ?? val.ans ?? val.value;
+            return inner !== undefined ? extractAnswerString(inner) : '';
+        }
+        return '';
+    }
+
     function storeQuestionAnswer(qObj, fallbackId) {
         if (!qObj || typeof qObj !== 'object') return false;
         let hit = false;
@@ -1510,36 +1532,30 @@
         const contentRaw = qObj.content ?? qObj.Content ?? qObj.questionContent?.content ?? qObj.QuestionText ?? qObj.question ?? qObj.title ?? '';
         const contentClean = typeof contentRaw === 'string' ? contentRaw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
 
-        // Direct answer string fields
         let rawAns = qObj.tans ?? qObj.Tans ?? qObj.trueAns ?? qObj.TrueAns ?? qObj.correctAnswer ?? qObj.CorrectAnswer ?? qObj.TrueAnswer ?? qObj.DapAn ?? qObj.RightAnswer;
-        if ((rawAns === undefined || rawAns === null || rawAns === '') && (typeof qObj.answer === 'string' || typeof qObj.Answer === 'string')) {
+        if ((rawAns === undefined || rawAns === null || rawAns === '') && (typeof qObj.answer === 'string' || typeof qObj.Answer === 'string' || Array.isArray(qObj.answer))) {
             rawAns = qObj.answer ?? qObj.Answer;
         }
+        let strAns = extractAnswerString(rawAns);
 
-        // Check option list on the same object for isTrue/point > 0 or numeric tans lookup
         const optArr = qObj.ans ?? qObj.Ans ?? qObj.options ?? qObj.Options ?? qObj.listAnswer ?? qObj.ListAnswer ?? qObj.answers ?? qObj.Answers;
         if (Array.isArray(optArr) && optArr.length > 0) {
-            if (rawAns !== undefined && rawAns !== null && /^\d+$/.test(String(rawAns).trim())) {
-                const nIdx = parseInt(String(rawAns).trim(), 10);
-                // Some schemas use 0-based index, others use 1-based position/id match
+            if (strAns && /^\d+$/.test(strAns.trim())) {
+                const nIdx = parseInt(strAns.trim(), 10);
                 const byId = optArr.find(o => o && typeof o === 'object' && Number(o.id ?? o.Id ?? o.position ?? o.Order) === nIdx);
                 const chosen = byId || optArr[nIdx] || optArr[nIdx - 1];
-                if (chosen) {
-                    const txt = typeof chosen === 'string' ? chosen : (chosen.content ?? chosen.Content ?? chosen.text ?? chosen.ans);
-                    if (txt && String(txt).trim() !== '______') rawAns = String(txt).trim();
-                }
+                const txt = extractAnswerString(chosen);
+                if (txt && txt.trim() !== '______') strAns = txt.trim();
             }
-            if (!rawAns || String(rawAns).trim() === '______') {
+            if (!strAns || strAns.trim() === '______') {
                 const trueOpt = optArr.find(o => o && typeof o === 'object' && (o.isTrue === true || o.IsTrue === true || o.true === 1 || o.True === 1 || o.isCorrect === true || Number(o.point ?? o.Point ?? 0) > 0));
-                if (trueOpt) {
-                    const txt = trueOpt.content ?? trueOpt.Content ?? trueOpt.text ?? trueOpt.ans ?? trueOpt.tans;
-                    if (txt && String(txt).trim() !== '______') rawAns = String(txt).trim();
-                }
+                const txt = extractAnswerString(trueOpt);
+                if (txt && txt.trim() !== '______') strAns = txt.trim();
             }
         }
 
-        if (rawAns !== undefined && rawAns !== null) {
-            const ansClean = String(rawAns).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (strAns) {
+            const ansClean = strAns.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
             if (ansClean && ansClean !== '______' && ansClean !== '...' && !ansClean.includes('translate.')) {
                 if (id !== undefined && id !== null && String(id) !== '') {
                     IOE.state.correctAnswers.set(String(id), ansClean);
@@ -1664,11 +1680,26 @@
             XMLHttpRequest.prototype.send = function (...args) {
                 this.addEventListener('load', function () {
                     try {
-                        if (this.responseText) parsePacket(this.responseText);
+                        if (!this.responseType || this.responseType === 'text') {
+                            if (this.responseText) parsePacket(this.responseText);
+                        } else if (this.responseType === 'json') {
+                            if (this.response) parsePacket(this.response);
+                        }
                     } catch (e) {}
                 });
                 return origSend.apply(this, args);
             };
+        } catch (e) {}
+
+        try {
+            if (win.Response?.prototype?.json) {
+                const origRespJson = win.Response.prototype.json;
+                win.Response.prototype.json = async function () {
+                    const data = await origRespJson.apply(this, arguments);
+                    try { if (data && typeof data === 'object') parsePacket(data); } catch (e) {}
+                    return data;
+                };
+            }
         } catch (e) {}
     }
 
@@ -1809,16 +1840,29 @@
         return { width: 960, height: 640 };
     }
 
-    function isNodeVisible(node) {
+    function canTraverseNode(node) {
         if (!node) return false;
         try {
             if (node.active === false || node.activeInHierarchy === false) return false;
             if (node.visible === false) return false;
             if (typeof node.isVisible === 'function' && !node.isVisible()) return false;
-            if (typeof node.opacity === 'number' && node.opacity <= 8) return false;
-            if (typeof node.getOpacity === 'function' && node.getOpacity() <= 8) return false;
+            if (node.scaleX === 0 || node.scaleY === 0) return false;
         } catch (e) {}
         return true;
+    }
+
+    function isSelfOpaque(node) {
+        if (!node) return false;
+        try {
+            if (typeof node.opacity === 'number' && node.opacity <= 8) return false;
+            if (typeof node.getOpacity === 'function' && node.getOpacity() <= 8) return false;
+            if (node._uiProps && typeof node._uiProps.localOpacity === 'number' && node._uiProps.localOpacity <= 0.03) return false;
+        } catch (e) {}
+        return true;
+    }
+
+    function isNodeVisible(node) {
+        return canTraverseNode(node) && isSelfOpaque(node);
     }
 
     function getNodeText(node) {
@@ -1842,8 +1886,17 @@
                 if (cc.Label) comp = node.getComponent(cc.Label);
                 if (!comp && cc.RichText) comp = node.getComponent(cc.RichText);
                 if (!comp && cc.EditBox) comp = node.getComponent(cc.EditBox);
-                const s = comp?.string;
+                if (!comp) comp = node.getComponent('cc.Label') || node.getComponent('cc.RichText');
+                const s = comp?.string ?? comp?.text;
                 if (s && typeof s === 'string') return s.replace(/<[^>]+>/g, '').trim();
+            }
+            if (Array.isArray(node._components)) {
+                for (const comp of node._components) {
+                    const s = comp?.string ?? comp?._string ?? comp?.text;
+                    if (s && typeof s === 'string' && s.trim()) {
+                        return s.replace(/<[^>]+>/g, '').trim();
+                    }
+                }
             }
             if (node._string && typeof node._string === 'string') return node._string.trim();
             if (node.string && typeof node.string === 'string') return node.string.trim();
@@ -1865,14 +1918,16 @@
         return pos;
     }
 
-    function extractCocosTexts(node, maxDepth = 15, curDepth = 0) {
-        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return [];
+    function extractCocosTexts(node, maxDepth = 24, curDepth = 0) {
+        if (!node || curDepth > maxDepth || !canTraverseNode(node)) return [];
         const results = [];
         try {
-            const clean = getNodeText(node);
-            if (clean.length > 0) {
-                const worldPos = getNodeWorldPos(node);
-                results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
+            if (isSelfOpaque(node)) {
+                const clean = getNodeText(node);
+                if (clean.length > 0) {
+                    const worldPos = getNodeWorldPos(node);
+                    results.push({ node, text: clean, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y });
+                }
             }
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
             for (const child of children) {
@@ -1882,25 +1937,27 @@
         return results;
     }
 
-    function extractSceneSpriteClues(node, maxDepth = 12, curDepth = 0, out = []) {
-        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return out;
+    function extractSceneSpriteClues(node, maxDepth = 16, curDepth = 0, out = []) {
+        if (!node || curDepth > maxDepth || !canTraverseNode(node)) return out;
         try {
-            const cc = win.cc;
-            let rawName = '';
-            if (typeof node.getComponent === 'function' && cc?.Sprite) {
-                const sp = node.getComponent(cc.Sprite);
-                rawName = sp?.spriteFrame?._name || sp?._spriteFrame?.name || '';
-            }
-            if (!rawName && node._spriteFrame) {
-                rawName = node._spriteFrame._name || node._spriteFrame.name || '';
-            }
-            if (rawName && typeof rawName === 'string') {
-                const clean = rawName.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim();
-                const lower = clean.toLowerCase();
-                if (clean.length >= 3 && clean.length <= 32 && /[a-z]/i.test(clean) &&
-                    !/^(bg|btn|button|panel|frame|border|icon|bar|box|popup|dialog|mask|cloud|star|coin|heart|sound|audio|close|next|back|ok|start|sprite|default|avatar|logo|arrow|line|dot|check|tick|cross|white|black)/i.test(lower) &&
-                    !out.includes(clean)) {
-                    out.push(clean);
+            if (isSelfOpaque(node)) {
+                const cc = win.cc;
+                let rawName = '';
+                if (typeof node.getComponent === 'function' && cc?.Sprite) {
+                    const sp = node.getComponent(cc.Sprite);
+                    rawName = sp?.spriteFrame?._name || sp?._spriteFrame?.name || '';
+                }
+                if (!rawName && node._spriteFrame) {
+                    rawName = node._spriteFrame._name || node._spriteFrame.name || '';
+                }
+                if (rawName && typeof rawName === 'string') {
+                    const clean = rawName.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim();
+                    const lower = clean.toLowerCase();
+                    if (clean.length >= 3 && clean.length <= 32 && /[a-z]/i.test(clean) &&
+                        !/^(bg|btn|button|panel|frame|border|icon|bar|box|popup|dialog|mask|cloud|star|coin|heart|sound|audio|close|next|back|ok|start|sprite|default|avatar|logo|arrow|line|dot|check|tick|cross|white|black)/i.test(lower) &&
+                        !out.includes(clean)) {
+                        out.push(clean);
+                    }
                 }
             }
             const ch = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -1909,22 +1966,30 @@
         return out;
     }
 
-    function findCocosClickables(node, maxDepth = 15, curDepth = 0) {
-        if (!node || curDepth > maxDepth || !isNodeVisible(node)) return [];
+    function hasEventListeners(node) {
+        const pools = [node._bubblingListeners, node._capturingListeners, node._eventTarget?._bubblingListeners];
+        for (const pool of pools) {
+            if (pool && typeof pool === 'object' && Object.keys(pool).length > 0) return true;
+        }
+        return false;
+    }
+
+    function findCocosClickables(node, maxDepth = 24, curDepth = 0) {
+        if (!node || curDepth > maxDepth || !canTraverseNode(node)) return [];
         const results = [];
         try {
             const cc = win.cc;
             let isClickable = false;
             let btnComp = null;
 
-            if (typeof node.getComponent === 'function' && cc?.Button) {
-                btnComp = node.getComponent(cc.Button);
-                if (btnComp && btnComp.interactable !== false) isClickable = true;
+            if (typeof node.getComponent === 'function') {
+                btnComp = (cc?.Button && node.getComponent(cc.Button)) || node.getComponent('cc.Button') || null;
+                if (btnComp && btnComp.interactable !== false && btnComp.enabled !== false) isClickable = true;
             }
             if (cc?.MenuItem && node instanceof cc.MenuItem && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
             if (cc?.ui?.Button && node instanceof cc.ui.Button && (typeof node.isEnabled !== 'function' || node.isEnabled())) isClickable = true;
             if (cc?.ui?.Widget && node instanceof cc.ui.Widget && typeof node.isTouchEnabled === 'function' && node.isTouchEnabled()) isClickable = true;
-            if (node._hasClickEventListener || node._touchListener || node._touchEnabled) isClickable = true;
+            if (node._hasClickEventListener || node._touchListener || node._touchEnabled || hasEventListeners(node)) isClickable = true;
 
             const name = (node.name || '').toLowerCase();
             if (name.includes('btn') || name.includes('opt') || name.includes('choice') || name.includes('item') || name.includes('ans') || name.includes('block') || name.includes('word')) {
@@ -1932,12 +1997,14 @@
             }
 
             if (isClickable) {
-                let txt = getNodeText(node);
+                let txt = isSelfOpaque(node) ? getNodeText(node) : '';
                 if (!txt) {
-                    txt = extractCocosTexts(node, 4).map(t => t.text).join(' ');
+                    txt = extractCocosTexts(node, 5).map(t => t.text).join(' ');
                 }
-                const worldPos = getNodeWorldPos(node);
-                results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name || '' });
+                if (isSelfOpaque(node) || txt.trim() || btnComp) {
+                    const worldPos = getNodeWorldPos(node);
+                    results.push({ node, text: txt.trim(), btnComp, y: node.y || 0, x: node.x || 0, worldX: worldPos.x, worldY: worldPos.y, name: node.name || '' });
+                }
             }
 
             const children = (typeof node.getChildren === 'function' ? node.getChildren() : node.children) || [];
@@ -1949,7 +2016,7 @@
     }
 
     async function clickCocosNode(node) {
-        if (!node || !isNodeVisible(node)) return false;
+        if (!node || !canTraverseNode(node)) return false;
         try {
             const cc = win.cc;
             const worldPos = getNodeWorldPos(node);
@@ -2532,9 +2599,9 @@
                     if (cc && cc.EditBox) {
                         const editBoxes = [];
                         (function findEB(n) {
-                            if (!n || !isNodeVisible(n)) return;
+                            if (!n || !canTraverseNode(n)) return;
                             if (typeof n.getComponent === 'function') {
-                                const eb = n.getComponent(cc.EditBox);
+                                const eb = n.getComponent(cc.EditBox) || n.getComponent('cc.EditBox');
                                 if (eb) editBoxes.push({ node: n, comp: eb });
                             }
                             const ch = (typeof n.getChildren === 'function' ? n.getChildren() : n.children) || [];
@@ -2580,13 +2647,30 @@
         return await solveCreateJSGame();
     }
 
+    function getSceneDiagnostics() {
+        const sc = getCocosScene();
+        const texts = sc ? extractCocosTexts(sc) : [];
+        const clicks = sc ? findCocosClickables(sc) : [];
+        return {
+            ccPresent: !!win.cc,
+            sceneFound: !!sc,
+            canvasCount: document.querySelectorAll('canvas').length,
+            cocosTextCount: texts.length,
+            cocosClickableCount: clicks.length,
+            sampleTexts: texts.slice(0, 6).map(t => t.text),
+            createJsRoot: !!(win.exportRoot || win.stage)
+        };
+    }
+
     IOE.canvas = {
         solveCanvasGame,
         solveCocosClozePassage,
         solveCocosWordReordering,
         solveCreateJSGame,
         getCocosScene,
+        canTraverseNode,
         isNodeVisible,
+        getSceneDiagnostics,
         extractCocosTexts,
         extractSceneSpriteClues,
         findCocosClickables,
@@ -2773,41 +2857,101 @@
     }
 
     let isProcessing = false;
+    let processingStartedAt = 0;
+
+    function isElVisible(el) {
+        if (!el || el.closest('#yanzioe-root, #yanzioe-license-modal, #yanzioe-revealer-hud, nav, header, footer')) return false;
+        const st = win.getComputedStyle ? win.getComputedStyle(el) : null;
+        if (st && (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') <= 0.02)) return false;
+        return el.offsetParent !== null || (st && st.position === 'fixed');
+    }
+
+    function isActionChromeText(txt) {
+        const s = String(txt || '').trim().toLowerCase();
+        return !s || /^(nộp bài|thoát|bỏ qua|tiếp tục|câu tiếp|câu sau|nghe lại|submit|next|skip|close|back|exit|ok|start|replay|play)$/.test(s);
+    }
+
+    function extractGenericDomQuestion() {
+        const containers = Array.from(document.querySelectorAll('[class*="exam" i], [class*="question" i], [class*="quiz" i], [class*="card" i], main, #root, section, article'))
+            .filter(isElVisible);
+        const optSelector = 'button, [role="button"], label, [class*="option" i], [class*="choice" i], [class*="answer" i], [class*="btn" i]';
+
+        for (const box of containers) {
+            const rawChoices = Array.from(box.querySelectorAll(optSelector)).filter(el =>
+                isElVisible(el) && !el.closest('#yanzioe-root, #yanzioe-license-modal, #yanzioe-revealer-hud') && !isActionChromeText(el.innerText || el.textContent)
+            );
+            const dedupChoices = rawChoices.filter((el, idx) => !rawChoices.some((other, oIdx) => oIdx !== idx && other.contains(el) && (other.innerText || '').trim() === (el.innerText || '').trim()));
+            const inputs = Array.from(box.querySelectorAll('input[type="text"], input:not([type]), textarea'))
+                .filter(el => isElVisible(el) && !el.closest('#yanzioe-root, #yanzioe-license-modal, #yanzioe-revealer-hud'));
+            const chips = Array.from(box.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder, [class*="word" i][class*="item" i]'))
+                .filter(isElVisible);
+
+            if (dedupChoices.length < 2 && inputs.length === 0 && chips.length < 3) continue;
+
+            const choiceSet = new Set(dedupChoices);
+            const stemNodes = Array.from(box.querySelectorAll('h1, h2, h3, h4, p, div, span')).filter(el => {
+                if (!isElVisible(el) || choiceSet.has(el)) return false;
+                if (dedupChoices.some(c => el.contains(c) || c.contains(el))) return false;
+                const t = (el.innerText || el.textContent || '').trim();
+                return t.length >= 6 && !/^\d{1,2}:\d{2}$/.test(t);
+            });
+            const stemEl = stemNodes.find(el => !stemNodes.some(other => other !== el && el.contains(other) && (other.innerText || '').trim().length >= 6)) || stemNodes[0];
+            const qText = (stemEl ? (stemEl.innerText || stemEl.textContent) : '').trim();
+            if (qText.length >= 6) {
+                return { qEl: stemEl, scopeRoot: box, qText, choiceEls: dedupChoices, chips };
+            }
+        }
+        return null;
+    }
 
     async function stepOnce(forceRun = false) {
-        if (isProcessing) return false;
+        if (isProcessing && (Date.now() - processingStartedAt < 18000)) return false;
         if (!forceRun && !IOE.features?.autoAnswer) return false;
         if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
         isProcessing = true;
+        processingStartedAt = Date.now();
 
         try {
             // 1. Canvas / Cocos2d / CreateJS minigame
             if (IOE.features?.canvasMode !== false && IOE.canvas?.solveCanvasGame) {
                 const canvasSolved = await IOE.canvas.solveCanvasGame();
                 if (canvasSolved) {
+                    IOE.events?.emit?.('frameSolved', { engine: IOE.state.lastEngine || 'Canvas' });
                     await IOE.delay(computeStepDelay());
                     return true;
                 }
             }
 
-            // 2. Web DOM Question Extraction
+            // 2. Web DOM Question Extraction (legacy selectors -> generic React DOM fallback)
             const qSelectors = '.question-content, .exam-content, .title-question, .content-question, #question-content, .ques-content, .quiz-question';
-            const qEls = Array.from(document.querySelectorAll(qSelectors))
-                .filter(el => el.offsetParent !== null && !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
-            const qEl = qEls[0] || document.querySelector('.question-content, .exam-content, #question-content');
-            const qText = qEl ? (qEl.innerText || qEl.textContent || '').trim() : '';
+            const qEls = Array.from(document.querySelectorAll(qSelectors)).filter(isElVisible);
+            let qEl = qEls[0] || null;
+            let qText = qEl ? (qEl.innerText || qEl.textContent || '').trim() : '';
+            let scopeRoot = qEl ? (qEl.closest('.question-container, .question-box, .quiz-item, .exam-item') || document) : document;
+            let choiceEls = [];
+            let chips = [];
+
+            if (qText) {
+                choiceEls = Array.from(scopeRoot.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, label'))
+                    .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+                chips = Array.from(scopeRoot.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
+            } else {
+                const fallbackDom = extractGenericDomQuestion();
+                if (fallbackDom) {
+                    qEl = fallbackDom.qEl;
+                    qText = fallbackDom.qText;
+                    scopeRoot = fallbackDom.scopeRoot;
+                    choiceEls = fallbackDom.choiceEls;
+                    chips = fallbackDom.chips;
+                }
+            }
 
             if (qText) {
                 IOE.state.lastEngine = 'Web DOM';
-                const scopeRoot = qEl.closest('.question-container, .question-box, .quiz-item, .exam-item') || document;
-                const choiceEls = Array.from(scopeRoot.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, label'))
-                    .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
                 const options = choiceEls.map(c => (c.innerText || c.textContent || '').trim()).filter(Boolean);
-
-                const chips = Array.from(scopeRoot.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
                 const isDomReorder = chips.length >= 3 && !options.length;
-                const taskOpts = isDomReorder ? chips.map(c => c.innerText.trim()).filter(Boolean) : options;
-                const qId = qEl.dataset?.id || qEl.id || qText.slice(0, 48);
+                const taskOpts = isDomReorder ? chips.map(c => (c.innerText || c.textContent || '').trim()).filter(Boolean) : options;
+                const qId = qEl?.dataset?.id || qEl?.id || qText.slice(0, 48);
 
                 let meta = IOE.state.solvedMeta.get(qId);
                 if (!meta) {
@@ -2822,9 +2966,14 @@
                     }
                     return true;
                 }
+            } else if (forceRun) {
+                const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
+                IOE.appendLog?.(`[Debug] Không phát hiện câu hỏi ở frame hiện tại: ${JSON.stringify({ href: location.href, top: win === win.top, ...diag })}`);
+                IOE.toast('⚠️ Không thấy câu hỏi trên trang (xem tab 🛠 Logs -> Soi trang)', 2500);
             }
         } catch (e) {
             console.error('[IOE AutoAnswer Error]', e);
+            if (forceRun) IOE.toast(`⚠️ Lỗi AutoAnswer: ${e?.message || e}`, 2500);
         } finally {
             isProcessing = false;
         }
@@ -2889,19 +3038,23 @@
         }
 
         // 3. Multiple Choice buttons / radios (strict match, no single-letter substring collision)
-        const choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type="radio"]'))
+        let choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type="radio"]'))
             .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+        if (choices.length === 0) {
+            choices = Array.from(root.querySelectorAll('button, [role="button"], label, [class*="option" i], [class*="choice" i], [class*="answer" i], [class*="btn" i]'))
+                .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal') && !isActionChromeText(el.innerText || el.textContent));
+        }
         if (choices.length > 0) {
             // Pass 1: exact text match
             let matched = choices.find(c => {
-                const ct = stripPrefix(c.innerText || c.value || '').toLowerCase();
+                const ct = stripPrefix(c.innerText || c.textContent || c.value || '').toLowerCase();
                 return ct && ct === cleanAns;
             });
             // Pass 2: word-boundary match (>= 2 chars)
             if (!matched && cleanAns.length >= 2) {
                 const esc = cleanAns.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const rx = new RegExp(`(^|\\s)${esc}(\\s|$)`, 'i');
-                matched = choices.find(c => rx.test(stripPrefix(c.innerText || c.value || '')));
+                matched = choices.find(c => rx.test(stripPrefix(c.innerText || c.textContent || c.value || '')));
             }
             // Pass 3: explicit letter A/B/C/D
             if (!matched && /^[a-d]\.?$/.test(normAns)) {
@@ -2911,7 +3064,7 @@
             if (matched) {
                 if (matched.tagName === 'INPUT') matched.checked = true;
                 matched.click();
-                IOE.toast(`🎯 Đã chọn: ${(matched.innerText || matched.value || rawAns).trim()}`, 1000);
+                IOE.toast(`🎯 Đã chọn: ${(matched.innerText || matched.textContent || matched.value || rawAns).trim()}`, 1000);
                 return true;
             }
         }
@@ -2941,6 +3094,7 @@
         stepOnce,
         fillAnswer,
         clickNextButton,
+        extractGenericDomQuestion,
         getFreezeTicks: () => frozenTickCount
     };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -2992,6 +3146,44 @@
         if (bestKey) IOE.featureConfigs.apiKey = bestKey;
     }
 
+    function isTopFrame() {
+        try { return win === win.top; } catch (e) { return false; }
+    }
+
+    function broadcastToFrames(msg) {
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            for (const f of iframes) {
+                try { f.contentWindow?.postMessage(msg, '*'); } catch (e) {}
+            }
+        } catch (e) {}
+    }
+
+    async function loadSavedConfigAsync() {
+        try {
+            if (!IOE.kv?.get) return;
+            const rawCfg = await IOE.kv.get(STORAGE_KEY);
+            if (rawCfg) {
+                const parsed = JSON.parse(rawCfg);
+                if (parsed.features) Object.assign(IOE.features, parsed.features);
+                if (parsed.configs) {
+                    const k = (parsed.configs.apiKey || '').trim();
+                    delete parsed.configs.apiKey;
+                    Object.assign(IOE.featureConfigs, parsed.configs);
+                    if (k && k.length > 5 && !(IOE.featureConfigs.apiKey || '').trim()) {
+                        IOE.featureConfigs.apiKey = k;
+                    }
+                }
+            }
+            if (!(IOE.featureConfigs.apiKey || '').trim()) {
+                const kvKey = (await IOE.kv.get('IOE_API_KEY') || '').trim();
+                if (kvKey.length > 5) IOE.featureConfigs.apiKey = kvKey;
+            }
+            const keyInp = document.getElementById('yanz-inp-key');
+            if (keyInp && IOE.featureConfigs.apiKey) keyInp.value = IOE.featureConfigs.apiKey;
+        } catch (e) {}
+    }
+
     function saveAllConfigs() {
         try {
             const key = (IOE.featureConfigs.apiKey || '').trim();
@@ -3000,10 +3192,13 @@
                 configs: { ...IOE.featureConfigs, apiKey: key },
                 savedAt: Date.now()
             };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            const payloadStr = JSON.stringify(payload);
+            try { localStorage.setItem(STORAGE_KEY, payloadStr); } catch (e) {}
+            IOE.kv?.set?.(STORAGE_KEY, payloadStr);
             if (key) {
-                localStorage.setItem('IOE_API_KEY', key);
-                localStorage.setItem('YANZIOE_API_KEY', key);
+                try { localStorage.setItem('IOE_API_KEY', key); } catch (e) {}
+                try { localStorage.setItem('YANZIOE_API_KEY', key); } catch (e) {}
+                IOE.kv?.set?.('IOE_API_KEY', key);
                 try { sessionStorage.setItem('IOE_API_KEY', key); } catch (e) {}
                 try {
                     let wn = {}; try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
@@ -3012,12 +3207,58 @@
                 try { document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`; } catch (e) {}
                 if (typeof GM_setValue === 'function') { try { GM_setValue('IOE_API_KEY', key); } catch (e) {} }
             }
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'SYNC_CFG', features: { ...IOE.features }, featureConfigs: { ...IOE.featureConfigs } });
         } catch (e) {}
     }
 
     loadSavedConfig();
+    loadSavedConfigAsync();
+
+    if (!win.__YANZIOE_FRAME_RELAY__) {
+        win.__YANZIOE_FRAME_RELAY__ = true;
+        win.addEventListener('message', async (ev) => {
+            const d = ev?.data;
+            if (!d || typeof d !== 'object') return;
+            if (d.type === 'YANZIOE_CMD') {
+                if (d.action === 'SYNC_CFG') {
+                    if (d.features) Object.assign(IOE.features, d.features);
+                    if (d.featureConfigs) Object.assign(IOE.featureConfigs, d.featureConfigs);
+                    broadcastToFrames(d);
+                } else if (d.action === 'STEP_ONCE') {
+                    broadcastToFrames(d);
+                    if (!isTopFrame()) await IOE.auto?.stepOnce?.(true);
+                } else if (d.action === 'DEBUG_SCAN') {
+                    broadcastToFrames(d);
+                    if (!isTopFrame()) {
+                        const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
+                        const domP = IOE.auto?.extractGenericDomQuestion ? IOE.auto.extractGenericDomQuestion()?.qText?.slice(0, 60) : '';
+                        try {
+                            win.top.postMessage({
+                                type: 'YANZIOE_TELEMETRY',
+                                event: 'debug',
+                                payload: { href: location.href, ...diag, domPreview: domP || '', pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size }
+                            }, '*');
+                        } catch (e) {}
+                    }
+                }
+            } else if (d.type === 'YANZIOE_TELEMETRY' && isTopFrame()) {
+                if (d.event === 'questionSolved' && d.meta) {
+                    IOE.state.lastEngine = d.meta.tier || IOE.state.lastEngine;
+                    IOE.events?.emit?.('questionSolved', d.meta);
+                } else if (d.event === 'debug' && d.payload) {
+                    IOE.appendLog?.(`[IFRAME Debug] ${JSON.stringify(d.payload)}`);
+                }
+            }
+        });
+        IOE.events.on('questionSolved', (meta) => {
+            if (!isTopFrame() && meta) {
+                try { win.top.postMessage({ type: 'YANZIOE_TELEMETRY', event: 'questionSolved', meta }, '*'); } catch (e) {}
+            }
+        });
+    }
 
     function createMainMenu() {
+        if (!isTopFrame()) return;
         if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return;
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
@@ -3197,16 +3438,17 @@
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v1.2.0 (Licensed).</div>
-                    <div style="display:flex;gap:6px;margin-top:6px;">
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.1')} (Licensed).</div>
+                    <div style="display:flex;gap:5px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
+                        <button id="yanz-btn-debug" style="flex:1;background:#4f46e5;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">🔍 Soi trang</button>
                         <button id="yanz-btn-scan-again" style="flex:1;background:#0369a1;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">Quét lại Scene</button>
                     </div>
                 </div>
             </div>
 
             <div id="yanzioe-pill" style="display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;">
-                🌐 YANZIOE v1.2.0
+                🌐 YANZIOE v${IOE.escHtml(IOE.version || '1.2.1')}
             </div>
         `;
 
@@ -3325,6 +3567,7 @@
 
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {
             appendLog('Quét & giải bài hiện tại...');
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'STEP_ONCE' });
             if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
             refreshStatusStats();
         });
@@ -3403,8 +3646,15 @@
             const box = document.getElementById('yanz-log-box');
             if (box) box.innerHTML = '';
         });
+        document.getElementById('yanz-btn-debug')?.addEventListener('click', () => {
+            const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
+            const domP = IOE.auto?.extractGenericDomQuestion ? IOE.auto.extractGenericDomQuestion()?.qText?.slice(0, 60) : '';
+            appendLog(`[TOP Debug] ${JSON.stringify({ href: location.href, iframes: document.querySelectorAll('iframe').length, ...diag, domPreview: domP || '', pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size })}`);
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'DEBUG_SCAN' });
+        });
         document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {
             appendLog('Đang quét lại Cocos2d/CreateJS/DOM...');
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'STEP_ONCE' });
             if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
             refreshStatusStats();
         });
@@ -3441,6 +3691,7 @@
                     IOE.toast(IOE.features.autoAnswer ? '⚡ Auto-Answer: BẬT (Alt+A)' : '⏹ Auto-Answer: TẮT (Alt+A)', 1200);
                 } else if (e.code === 'KeyS') {
                     e.preventDefault();
+                    broadcastToFrames({ type: 'YANZIOE_CMD', action: 'STEP_ONCE' });
                     IOE.auto?.stepOnce?.(true);
                 }
             });

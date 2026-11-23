@@ -65,6 +65,9 @@ def make_userscript_header(ver, is_coke=False):
 // @match        *://*.ioe.vn/*
 // @match        *://*.go.vn/*
 // @match        *://*.vtc.vn/*
+// @match        *://*.vtconline.vn/*
+// @match        *://vtconline.vn/*
+// @match        *://*.goplay.vn/*
 // @match        *://api-edu.go.vn/*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -205,6 +208,9 @@ def write_extension_dir(target_dir, code, name_suffix=""):
                     "*://*.ioe.vn/*",
                     "*://*.go.vn/*",
                     "*://*.vtc.vn/*",
+                    "*://*.vtconline.vn/*",
+                    "*://vtconline.vn/*",
+                    "*://*.goplay.vn/*",
                     "*://api-edu.go.vn/*"
                 ],
                 "js": ["bridge.js"],
@@ -218,6 +224,9 @@ def write_extension_dir(target_dir, code, name_suffix=""):
                     "*://*.ioe.vn/*",
                     "*://*.go.vn/*",
                     "*://*.vtc.vn/*",
+                    "*://*.vtconline.vn/*",
+                    "*://vtconline.vn/*",
+                    "*://*.goplay.vn/*",
                     "*://api-edu.go.vn/*"
                 ],
                 "js": ["content.js"],
@@ -231,6 +240,9 @@ def write_extension_dir(target_dir, code, name_suffix=""):
             "*://*.ioe.vn/*",
             "*://*.go.vn/*",
             "*://*.vtc.vn/*",
+            "*://*.vtconline.vn/*",
+            "*://vtconline.vn/*",
+            "*://*.goplay.vn/*",
             "*://api-edu.go.vn/*",
             "https://yanzbnshop.onrender.com/*",
             "https://api.groq.com/*",
@@ -242,7 +254,7 @@ def write_extension_dir(target_dir, code, name_suffix=""):
         "web_accessible_resources": [
             {
                 "resources": ["YANZIOE.js", "bridge.js"],
-                "matches": ["*://ioe.vn/*", "*://*.ioe.vn/*", "*://*.go.vn/*", "*://*.vtc.vn/*", "*://api-edu.go.vn/*"]
+                "matches": ["*://ioe.vn/*", "*://*.ioe.vn/*", "*://*.go.vn/*", "*://*.vtc.vn/*", "*://*.vtconline.vn/*", "*://vtconline.vn/*", "*://*.goplay.vn/*", "*://api-edu.go.vn/*"]
             }
         ]
     }

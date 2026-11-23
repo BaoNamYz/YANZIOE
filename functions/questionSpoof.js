@@ -204,7 +204,7 @@
     }
 
     async function callGeminiApi(apiKey, prompt, expectJson = true) {
-        const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+        const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
         for (const m of models) {
             try {
                 const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -213,7 +213,7 @@
                 const r = await extPostJson(endpoint, { 'Content-Type': 'application/json' }, {
                     contents: [{ parts: [{ text: prompt }] }],
                     generationConfig: genCfg
-                }, 14000);
+                }, 8500);
 
                 if (r && r.ok && r.text) {
                     const j = JSON.parse(r.text);
@@ -244,7 +244,7 @@
                 const r = await extPostJson(endpoint, {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${apiKey}`
-                }, bodyObj, 14000);
+                }, bodyObj, 8500);
 
                 if (r && r.ok && r.text) {
                     const j = JSON.parse(r.text);
@@ -649,6 +649,7 @@
             return meta;
         } else if (lastAiError) {
             IOE.appendLog?.(`❌ Lỗi AI: ${lastAiError}`);
+            IOE.toast(`⚠️ AI lỗi: ${lastAiError.slice(0, 75)}`, 2800);
         }
 
         return null;
@@ -677,6 +678,20 @@
         return null;
     }
 
+    function extractAnswerString(val) {
+        if (val === undefined || val === null) return '';
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return String(val);
+        if (Array.isArray(val)) {
+            const parts = val.map(x => extractAnswerString(x)).filter(Boolean);
+            return parts.join(' ').trim();
+        }
+        if (typeof val === 'object') {
+            const inner = val.tans ?? val.Tans ?? val.content ?? val.Content ?? val.text ?? val.ans ?? val.value;
+            return inner !== undefined ? extractAnswerString(inner) : '';
+        }
+        return '';
+    }
+
     function storeQuestionAnswer(qObj, fallbackId) {
         if (!qObj || typeof qObj !== 'object') return false;
         let hit = false;
@@ -684,36 +699,30 @@
         const contentRaw = qObj.content ?? qObj.Content ?? qObj.questionContent?.content ?? qObj.QuestionText ?? qObj.question ?? qObj.title ?? '';
         const contentClean = typeof contentRaw === 'string' ? contentRaw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
 
-        // Direct answer string fields
         let rawAns = qObj.tans ?? qObj.Tans ?? qObj.trueAns ?? qObj.TrueAns ?? qObj.correctAnswer ?? qObj.CorrectAnswer ?? qObj.TrueAnswer ?? qObj.DapAn ?? qObj.RightAnswer;
-        if ((rawAns === undefined || rawAns === null || rawAns === '') && (typeof qObj.answer === 'string' || typeof qObj.Answer === 'string')) {
+        if ((rawAns === undefined || rawAns === null || rawAns === '') && (typeof qObj.answer === 'string' || typeof qObj.Answer === 'string' || Array.isArray(qObj.answer))) {
             rawAns = qObj.answer ?? qObj.Answer;
         }
+        let strAns = extractAnswerString(rawAns);
 
-        // Check option list on the same object for isTrue/point > 0 or numeric tans lookup
         const optArr = qObj.ans ?? qObj.Ans ?? qObj.options ?? qObj.Options ?? qObj.listAnswer ?? qObj.ListAnswer ?? qObj.answers ?? qObj.Answers;
         if (Array.isArray(optArr) && optArr.length > 0) {
-            if (rawAns !== undefined && rawAns !== null && /^\d+$/.test(String(rawAns).trim())) {
-                const nIdx = parseInt(String(rawAns).trim(), 10);
-                // Some schemas use 0-based index, others use 1-based position/id match
+            if (strAns && /^\d+$/.test(strAns.trim())) {
+                const nIdx = parseInt(strAns.trim(), 10);
                 const byId = optArr.find(o => o && typeof o === 'object' && Number(o.id ?? o.Id ?? o.position ?? o.Order) === nIdx);
                 const chosen = byId || optArr[nIdx] || optArr[nIdx - 1];
-                if (chosen) {
-                    const txt = typeof chosen === 'string' ? chosen : (chosen.content ?? chosen.Content ?? chosen.text ?? chosen.ans);
-                    if (txt && String(txt).trim() !== '______') rawAns = String(txt).trim();
-                }
+                const txt = extractAnswerString(chosen);
+                if (txt && txt.trim() !== '______') strAns = txt.trim();
             }
-            if (!rawAns || String(rawAns).trim() === '______') {
+            if (!strAns || strAns.trim() === '______') {
                 const trueOpt = optArr.find(o => o && typeof o === 'object' && (o.isTrue === true || o.IsTrue === true || o.true === 1 || o.True === 1 || o.isCorrect === true || Number(o.point ?? o.Point ?? 0) > 0));
-                if (trueOpt) {
-                    const txt = trueOpt.content ?? trueOpt.Content ?? trueOpt.text ?? trueOpt.ans ?? trueOpt.tans;
-                    if (txt && String(txt).trim() !== '______') rawAns = String(txt).trim();
-                }
+                const txt = extractAnswerString(trueOpt);
+                if (txt && txt.trim() !== '______') strAns = txt.trim();
             }
         }
 
-        if (rawAns !== undefined && rawAns !== null) {
-            const ansClean = String(rawAns).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (strAns) {
+            const ansClean = strAns.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
             if (ansClean && ansClean !== '______' && ansClean !== '...' && !ansClean.includes('translate.')) {
                 if (id !== undefined && id !== null && String(id) !== '') {
                     IOE.state.correctAnswers.set(String(id), ansClean);
@@ -838,11 +847,26 @@
             XMLHttpRequest.prototype.send = function (...args) {
                 this.addEventListener('load', function () {
                     try {
-                        if (this.responseText) parsePacket(this.responseText);
+                        if (!this.responseType || this.responseType === 'text') {
+                            if (this.responseText) parsePacket(this.responseText);
+                        } else if (this.responseType === 'json') {
+                            if (this.response) parsePacket(this.response);
+                        }
                     } catch (e) {}
                 });
                 return origSend.apply(this, args);
             };
+        } catch (e) {}
+
+        try {
+            if (win.Response?.prototype?.json) {
+                const origRespJson = win.Response.prototype.json;
+                win.Response.prototype.json = async function () {
+                    const data = await origRespJson.apply(this, arguments);
+                    try { if (data && typeof data === 'object') parsePacket(data); } catch (e) {}
+                    return data;
+                };
+            }
         } catch (e) {}
     }
 

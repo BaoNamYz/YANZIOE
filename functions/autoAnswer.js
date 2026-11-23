@@ -41,41 +41,101 @@
     }
 
     let isProcessing = false;
+    let processingStartedAt = 0;
+
+    function isElVisible(el) {
+        if (!el || el.closest('#yanzioe-root, #yanzioe-license-modal, #yanzioe-revealer-hud, nav, header, footer')) return false;
+        const st = win.getComputedStyle ? win.getComputedStyle(el) : null;
+        if (st && (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') <= 0.02)) return false;
+        return el.offsetParent !== null || (st && st.position === 'fixed');
+    }
+
+    function isActionChromeText(txt) {
+        const s = String(txt || '').trim().toLowerCase();
+        return !s || /^(nộp bài|thoát|bỏ qua|tiếp tục|câu tiếp|câu sau|nghe lại|submit|next|skip|close|back|exit|ok|start|replay|play)$/.test(s);
+    }
+
+    function extractGenericDomQuestion() {
+        const containers = Array.from(document.querySelectorAll('[class*="exam" i], [class*="question" i], [class*="quiz" i], [class*="card" i], main, #root, section, article'))
+            .filter(isElVisible);
+        const optSelector = 'button, [role="button"], label, [class*="option" i], [class*="choice" i], [class*="answer" i], [class*="btn" i]';
+
+        for (const box of containers) {
+            const rawChoices = Array.from(box.querySelectorAll(optSelector)).filter(el =>
+                isElVisible(el) && !el.closest('#yanzioe-root, #yanzioe-license-modal, #yanzioe-revealer-hud') && !isActionChromeText(el.innerText || el.textContent)
+            );
+            const dedupChoices = rawChoices.filter((el, idx) => !rawChoices.some((other, oIdx) => oIdx !== idx && other.contains(el) && (other.innerText || '').trim() === (el.innerText || '').trim()));
+            const inputs = Array.from(box.querySelectorAll('input[type="text"], input:not([type]), textarea'))
+                .filter(el => isElVisible(el) && !el.closest('#yanzioe-root, #yanzioe-license-modal, #yanzioe-revealer-hud'));
+            const chips = Array.from(box.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder, [class*="word" i][class*="item" i]'))
+                .filter(isElVisible);
+
+            if (dedupChoices.length < 2 && inputs.length === 0 && chips.length < 3) continue;
+
+            const choiceSet = new Set(dedupChoices);
+            const stemNodes = Array.from(box.querySelectorAll('h1, h2, h3, h4, p, div, span')).filter(el => {
+                if (!isElVisible(el) || choiceSet.has(el)) return false;
+                if (dedupChoices.some(c => el.contains(c) || c.contains(el))) return false;
+                const t = (el.innerText || el.textContent || '').trim();
+                return t.length >= 6 && !/^\d{1,2}:\d{2}$/.test(t);
+            });
+            const stemEl = stemNodes.find(el => !stemNodes.some(other => other !== el && el.contains(other) && (other.innerText || '').trim().length >= 6)) || stemNodes[0];
+            const qText = (stemEl ? (stemEl.innerText || stemEl.textContent) : '').trim();
+            if (qText.length >= 6) {
+                return { qEl: stemEl, scopeRoot: box, qText, choiceEls: dedupChoices, chips };
+            }
+        }
+        return null;
+    }
 
     async function stepOnce(forceRun = false) {
-        if (isProcessing) return false;
+        if (isProcessing && (Date.now() - processingStartedAt < 18000)) return false;
         if (!forceRun && !IOE.features?.autoAnswer) return false;
         if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return false;
         isProcessing = true;
+        processingStartedAt = Date.now();
 
         try {
             // 1. Canvas / Cocos2d / CreateJS minigame
             if (IOE.features?.canvasMode !== false && IOE.canvas?.solveCanvasGame) {
                 const canvasSolved = await IOE.canvas.solveCanvasGame();
                 if (canvasSolved) {
+                    IOE.events?.emit?.('frameSolved', { engine: IOE.state.lastEngine || 'Canvas' });
                     await IOE.delay(computeStepDelay());
                     return true;
                 }
             }
 
-            // 2. Web DOM Question Extraction
+            // 2. Web DOM Question Extraction (legacy selectors -> generic React DOM fallback)
             const qSelectors = '.question-content, .exam-content, .title-question, .content-question, #question-content, .ques-content, .quiz-question';
-            const qEls = Array.from(document.querySelectorAll(qSelectors))
-                .filter(el => el.offsetParent !== null && !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
-            const qEl = qEls[0] || document.querySelector('.question-content, .exam-content, #question-content');
-            const qText = qEl ? (qEl.innerText || qEl.textContent || '').trim() : '';
+            const qEls = Array.from(document.querySelectorAll(qSelectors)).filter(isElVisible);
+            let qEl = qEls[0] || null;
+            let qText = qEl ? (qEl.innerText || qEl.textContent || '').trim() : '';
+            let scopeRoot = qEl ? (qEl.closest('.question-container, .question-box, .quiz-item, .exam-item') || document) : document;
+            let choiceEls = [];
+            let chips = [];
+
+            if (qText) {
+                choiceEls = Array.from(scopeRoot.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, label'))
+                    .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+                chips = Array.from(scopeRoot.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
+            } else {
+                const fallbackDom = extractGenericDomQuestion();
+                if (fallbackDom) {
+                    qEl = fallbackDom.qEl;
+                    qText = fallbackDom.qText;
+                    scopeRoot = fallbackDom.scopeRoot;
+                    choiceEls = fallbackDom.choiceEls;
+                    chips = fallbackDom.chips;
+                }
+            }
 
             if (qText) {
                 IOE.state.lastEngine = 'Web DOM';
-                const scopeRoot = qEl.closest('.question-container, .question-box, .quiz-item, .exam-item') || document;
-                const choiceEls = Array.from(scopeRoot.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, label'))
-                    .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
                 const options = choiceEls.map(c => (c.innerText || c.textContent || '').trim()).filter(Boolean);
-
-                const chips = Array.from(scopeRoot.querySelectorAll('.word-item, .drag-item, .card-word, .item-reorder'));
                 const isDomReorder = chips.length >= 3 && !options.length;
-                const taskOpts = isDomReorder ? chips.map(c => c.innerText.trim()).filter(Boolean) : options;
-                const qId = qEl.dataset?.id || qEl.id || qText.slice(0, 48);
+                const taskOpts = isDomReorder ? chips.map(c => (c.innerText || c.textContent || '').trim()).filter(Boolean) : options;
+                const qId = qEl?.dataset?.id || qEl?.id || qText.slice(0, 48);
 
                 let meta = IOE.state.solvedMeta.get(qId);
                 if (!meta) {
@@ -90,9 +150,14 @@
                     }
                     return true;
                 }
+            } else if (forceRun) {
+                const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
+                IOE.appendLog?.(`[Debug] Không phát hiện câu hỏi ở frame hiện tại: ${JSON.stringify({ href: location.href, top: win === win.top, ...diag })}`);
+                IOE.toast('⚠️ Không thấy câu hỏi trên trang (xem tab 🛠 Logs -> Soi trang)', 2500);
             }
         } catch (e) {
             console.error('[IOE AutoAnswer Error]', e);
+            if (forceRun) IOE.toast(`⚠️ Lỗi AutoAnswer: ${e?.message || e}`, 2500);
         } finally {
             isProcessing = false;
         }
@@ -157,19 +222,23 @@
         }
 
         // 3. Multiple Choice buttons / radios (strict match, no single-letter substring collision)
-        const choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type="radio"]'))
+        let choices = Array.from(root.querySelectorAll('.answer-item, .choice-item, .btn-answer, .item-answer, input[type="radio"]'))
             .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal'));
+        if (choices.length === 0) {
+            choices = Array.from(root.querySelectorAll('button, [role="button"], label, [class*="option" i], [class*="choice" i], [class*="answer" i], [class*="btn" i]'))
+                .filter(el => !el.closest('#yanzioe-root') && !el.closest('#yanzioe-license-modal') && !isActionChromeText(el.innerText || el.textContent));
+        }
         if (choices.length > 0) {
             // Pass 1: exact text match
             let matched = choices.find(c => {
-                const ct = stripPrefix(c.innerText || c.value || '').toLowerCase();
+                const ct = stripPrefix(c.innerText || c.textContent || c.value || '').toLowerCase();
                 return ct && ct === cleanAns;
             });
             // Pass 2: word-boundary match (>= 2 chars)
             if (!matched && cleanAns.length >= 2) {
                 const esc = cleanAns.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const rx = new RegExp(`(^|\\s)${esc}(\\s|$)`, 'i');
-                matched = choices.find(c => rx.test(stripPrefix(c.innerText || c.value || '')));
+                matched = choices.find(c => rx.test(stripPrefix(c.innerText || c.textContent || c.value || '')));
             }
             // Pass 3: explicit letter A/B/C/D
             if (!matched && /^[a-d]\.?$/.test(normAns)) {
@@ -179,7 +248,7 @@
             if (matched) {
                 if (matched.tagName === 'INPUT') matched.checked = true;
                 matched.click();
-                IOE.toast(`🎯 Đã chọn: ${(matched.innerText || matched.value || rawAns).trim()}`, 1000);
+                IOE.toast(`🎯 Đã chọn: ${(matched.innerText || matched.textContent || matched.value || rawAns).trim()}`, 1000);
                 return true;
             }
         }
@@ -209,6 +278,7 @@
         stepOnce,
         fillAnswer,
         clickNextButton,
+        extractGenericDomQuestion,
         getFreezeTicks: () => frozenTickCount
     };
 })(typeof window !== 'undefined' ? window : globalThis);

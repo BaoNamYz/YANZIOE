@@ -35,15 +35,16 @@ print(f"Running YANZIOE E2E Suite via headless Chrome...")
 res = subprocess.run(cmd, capture_output=True, text=True, timeout=15, encoding='utf-8', errors='ignore')
 
 output = res.stdout
-if 'YANZIOE_E2E_PASSED' in output:
+if '<title>YANZIOE_E2E_PASSED</title>' in output and '<span class="fail">[FAIL]' not in output:
     print("✅ TEST SUCCESS: YANZIOE E2E suite PASSED!")
     for line in output.splitlines():
-        if '[PASS]' in line or '[FAIL]' in line or 'SUMMARY:' in line:
-            clean = line.replace('<span>', '').replace('</span>', '').strip()
+        if '<span class="pass">[PASS]' in line or 'STATUS: YANZIOE_E2E' in line:
+            clean = line.replace('<div id="log">', '').replace('<span class="pass">', '').replace('</span>', '').replace('</div>', '').strip()
             print(clean)
 else:
     print("❌ TEST FAILED or incomplete!")
     for line in output.splitlines():
-        if '[PASS]' in line or '[FAIL]' in line:
-            print(line)
+        if '<span class="pass">[PASS]' in line or '<span class="fail">[FAIL]' in line or 'STATUS: YANZIOE_E2E' in line:
+            clean = line.replace('<span class="pass">', '').replace('<span class="fail">', '').replace('</span>', '').strip()
+            print(clean)
     exit(1)

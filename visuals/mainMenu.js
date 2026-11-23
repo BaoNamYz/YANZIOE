@@ -43,6 +43,44 @@
         if (bestKey) IOE.featureConfigs.apiKey = bestKey;
     }
 
+    function isTopFrame() {
+        try { return win === win.top; } catch (e) { return false; }
+    }
+
+    function broadcastToFrames(msg) {
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            for (const f of iframes) {
+                try { f.contentWindow?.postMessage(msg, '*'); } catch (e) {}
+            }
+        } catch (e) {}
+    }
+
+    async function loadSavedConfigAsync() {
+        try {
+            if (!IOE.kv?.get) return;
+            const rawCfg = await IOE.kv.get(STORAGE_KEY);
+            if (rawCfg) {
+                const parsed = JSON.parse(rawCfg);
+                if (parsed.features) Object.assign(IOE.features, parsed.features);
+                if (parsed.configs) {
+                    const k = (parsed.configs.apiKey || '').trim();
+                    delete parsed.configs.apiKey;
+                    Object.assign(IOE.featureConfigs, parsed.configs);
+                    if (k && k.length > 5 && !(IOE.featureConfigs.apiKey || '').trim()) {
+                        IOE.featureConfigs.apiKey = k;
+                    }
+                }
+            }
+            if (!(IOE.featureConfigs.apiKey || '').trim()) {
+                const kvKey = (await IOE.kv.get('IOE_API_KEY') || '').trim();
+                if (kvKey.length > 5) IOE.featureConfigs.apiKey = kvKey;
+            }
+            const keyInp = document.getElementById('yanz-inp-key');
+            if (keyInp && IOE.featureConfigs.apiKey) keyInp.value = IOE.featureConfigs.apiKey;
+        } catch (e) {}
+    }
+
     function saveAllConfigs() {
         try {
             const key = (IOE.featureConfigs.apiKey || '').trim();
@@ -51,10 +89,13 @@
                 configs: { ...IOE.featureConfigs, apiKey: key },
                 savedAt: Date.now()
             };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            const payloadStr = JSON.stringify(payload);
+            try { localStorage.setItem(STORAGE_KEY, payloadStr); } catch (e) {}
+            IOE.kv?.set?.(STORAGE_KEY, payloadStr);
             if (key) {
-                localStorage.setItem('IOE_API_KEY', key);
-                localStorage.setItem('YANZIOE_API_KEY', key);
+                try { localStorage.setItem('IOE_API_KEY', key); } catch (e) {}
+                try { localStorage.setItem('YANZIOE_API_KEY', key); } catch (e) {}
+                IOE.kv?.set?.('IOE_API_KEY', key);
                 try { sessionStorage.setItem('IOE_API_KEY', key); } catch (e) {}
                 try {
                     let wn = {}; try { wn = JSON.parse(window.name || '{}'); } catch (e) {}
@@ -63,12 +104,58 @@
                 try { document.cookie = `IOE_API_KEY=${encodeURIComponent(key)}; path=/; max-age=315360000; SameSite=Lax`; } catch (e) {}
                 if (typeof GM_setValue === 'function') { try { GM_setValue('IOE_API_KEY', key); } catch (e) {} }
             }
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'SYNC_CFG', features: { ...IOE.features }, featureConfigs: { ...IOE.featureConfigs } });
         } catch (e) {}
     }
 
     loadSavedConfig();
+    loadSavedConfigAsync();
+
+    if (!win.__YANZIOE_FRAME_RELAY__) {
+        win.__YANZIOE_FRAME_RELAY__ = true;
+        win.addEventListener('message', async (ev) => {
+            const d = ev?.data;
+            if (!d || typeof d !== 'object') return;
+            if (d.type === 'YANZIOE_CMD') {
+                if (d.action === 'SYNC_CFG') {
+                    if (d.features) Object.assign(IOE.features, d.features);
+                    if (d.featureConfigs) Object.assign(IOE.featureConfigs, d.featureConfigs);
+                    broadcastToFrames(d);
+                } else if (d.action === 'STEP_ONCE') {
+                    broadcastToFrames(d);
+                    if (!isTopFrame()) await IOE.auto?.stepOnce?.(true);
+                } else if (d.action === 'DEBUG_SCAN') {
+                    broadcastToFrames(d);
+                    if (!isTopFrame()) {
+                        const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
+                        const domP = IOE.auto?.extractGenericDomQuestion ? IOE.auto.extractGenericDomQuestion()?.qText?.slice(0, 60) : '';
+                        try {
+                            win.top.postMessage({
+                                type: 'YANZIOE_TELEMETRY',
+                                event: 'debug',
+                                payload: { href: location.href, ...diag, domPreview: domP || '', pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size }
+                            }, '*');
+                        } catch (e) {}
+                    }
+                }
+            } else if (d.type === 'YANZIOE_TELEMETRY' && isTopFrame()) {
+                if (d.event === 'questionSolved' && d.meta) {
+                    IOE.state.lastEngine = d.meta.tier || IOE.state.lastEngine;
+                    IOE.events?.emit?.('questionSolved', d.meta);
+                } else if (d.event === 'debug' && d.payload) {
+                    IOE.appendLog?.(`[IFRAME Debug] ${JSON.stringify(d.payload)}`);
+                }
+            }
+        });
+        IOE.events.on('questionSolved', (meta) => {
+            if (!isTopFrame() && meta) {
+                try { win.top.postMessage({ type: 'YANZIOE_TELEMETRY', event: 'questionSolved', meta }, '*'); } catch (e) {}
+            }
+        });
+    }
 
     function createMainMenu() {
+        if (!isTopFrame()) return;
         if (!(IOE.state?.licensed || IOE.license?.isLicensed?.())) return;
         if (document.getElementById('yanzioe-root') || !document.body) return;
 
@@ -248,16 +335,17 @@
 
                 <!-- Tab 5: Logs -->
                 <div id="yanz-tab-dev" class="yanz-tab-content" style="display:none;padding:12px 14px;">
-                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v1.2.0 (Licensed).</div>
-                    <div style="display:flex;gap:6px;margin-top:6px;">
+                    <div id="yanz-log-box" style="background:#090d16;border:1px solid rgba(51,65,85,0.8);border-radius:6px;padding:6px 8px;font-family:monospace;font-size:10.5px;color:#38bdf8;height:120px;overflow-y:auto;white-space:pre-wrap;">[YANZIOE] Khởi động hệ thống v${IOE.escHtml(IOE.version || '1.2.1')} (Licensed).</div>
+                    <div style="display:flex;gap:5px;margin-top:6px;">
                         <button id="yanz-btn-clear-log" style="flex:1;background:rgba(51,65,85,0.6);border:none;color:#cbd5e1;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;">Xóa Logs</button>
+                        <button id="yanz-btn-debug" style="flex:1;background:#4f46e5;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">🔍 Soi trang</button>
                         <button id="yanz-btn-scan-again" style="flex:1;background:#0369a1;border:none;color:#fff;padding:5px 0;border-radius:4px;font-size:10px;cursor:pointer;font-weight:700;">Quét lại Scene</button>
                     </div>
                 </div>
             </div>
 
             <div id="yanzioe-pill" style="display:none;background:rgba(15,23,42,0.95);backdrop-filter:blur(12px);border:1px solid rgba(56,189,248,0.6);border-radius:20px;padding:6px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.5);cursor:pointer;color:#38bdf8;font-size:12px;font-weight:800;animation:ioeRgb 4s linear infinite;">
-                🌐 YANZIOE v1.2.0
+                🌐 YANZIOE v${IOE.escHtml(IOE.version || '1.2.1')}
             </div>
         `;
 
@@ -376,6 +464,7 @@
 
         document.getElementById('yanzioe-solve-btn')?.addEventListener('click', async () => {
             appendLog('Quét & giải bài hiện tại...');
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'STEP_ONCE' });
             if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
             refreshStatusStats();
         });
@@ -454,8 +543,15 @@
             const box = document.getElementById('yanz-log-box');
             if (box) box.innerHTML = '';
         });
+        document.getElementById('yanz-btn-debug')?.addEventListener('click', () => {
+            const diag = IOE.canvas?.getSceneDiagnostics ? IOE.canvas.getSceneDiagnostics() : {};
+            const domP = IOE.auto?.extractGenericDomQuestion ? IOE.auto.extractGenericDomQuestion()?.qText?.slice(0, 60) : '';
+            appendLog(`[TOP Debug] ${JSON.stringify({ href: location.href, iframes: document.querySelectorAll('iframe').length, ...diag, domPreview: domP || '', pkt: IOE.state.packetHits || 0, keys: IOE.state.correctAnswers.size })}`);
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'DEBUG_SCAN' });
+        });
         document.getElementById('yanz-btn-scan-again')?.addEventListener('click', async () => {
             appendLog('Đang quét lại Cocos2d/CreateJS/DOM...');
+            broadcastToFrames({ type: 'YANZIOE_CMD', action: 'STEP_ONCE' });
             if (IOE.auto?.stepOnce) await IOE.auto.stepOnce(true);
             refreshStatusStats();
         });
@@ -492,6 +588,7 @@
                     IOE.toast(IOE.features.autoAnswer ? '⚡ Auto-Answer: BẬT (Alt+A)' : '⏹ Auto-Answer: TẮT (Alt+A)', 1200);
                 } else if (e.code === 'KeyS') {
                     e.preventDefault();
+                    broadcastToFrames({ type: 'YANZIOE_CMD', action: 'STEP_ONCE' });
                     IOE.auto?.stepOnce?.(true);
                 }
             });

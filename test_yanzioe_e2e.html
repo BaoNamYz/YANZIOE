@@ -367,8 +367,46 @@
                 clearInterval(tId);
                 log('23. Alt+A toggles AutoAnswer & Freeze Timer blocks countdown intervals', toggledOk && countdownLeft === 60 && window.IOE.auto.getFreezeTicks() >= 1);
 
+                // Test 24: Repro - IOE v3 tans Array schema + XHR responseType='json' must extract answer cleanly (not "[object Object]")
+                window.IOE.state.correctAnswers.clear();
+                window.IOE.question.parsePacket({
+                    data: {
+                        questionArr: [{
+                            questionId: 'q_v3_arr',
+                            content: 'Where did she go yesterday?',
+                            tans: [{ content: 'She went to school.', dataType: 1 }]
+                        }]
+                    }
+                });
+                const v3Ans = window.IOE.state.correctAnswers.get('q_v3_arr');
+                log('24. Parses IOE v3 tans array schema without "[object Object]" corruption', v3Ans === 'She went to school.');
+
+                // Test 25: Repro - Cocos container with opacity=0 holding visible child Label & _bubblingListeners button
+                const parentLayer = {
+                    active: true, activeInHierarchy: true, visible: true, opacity: 0,
+                    children: [
+                        { active: true, activeInHierarchy: true, visible: true, opacity: 255, _components: [{ string: 'What is 2 + 3?' }], children: [], convertToWorldSpaceAR: () => ({ x: 100, y: 400 }) },
+                        { active: true, activeInHierarchy: true, visible: true, opacity: 255, name: 'panelCard', _bubblingListeners: { touchend: [() => {}] }, _components: [{ string: '5' }], children: [], emit() {}, convertToWorldSpaceAR: () => ({ x: 200, y: 200 }) }
+                    ]
+                };
+                const extractedFromZeroOpacity = window.IOE.canvas.extractCocosTexts(parentLayer);
+                const foundBubblingBtn = window.IOE.canvas.findCocosClickables(parentLayer);
+                log('25. Traverses opacity=0 Cocos container to read visible children & _bubblingListeners buttons', extractedFromZeroOpacity.length >= 2 && foundBubblingBtn.some(b => b.text === '5'));
+
+                // Test 26: Repro - Modern React IOE DOM without legacy .question-content class
+                const reactHost = document.createElement('div');
+                reactHost.id = 'root';
+                reactHost.innerHTML = `<div class="ioe-exam-card"><div class="text-lg font-bold">Câu hỏi 1: Choose the correct spelling</div><button type="button" class="ioe-btn">beautifull</button><button type="button" class="ioe-btn">beautiful</button></div>`;
+                document.body.appendChild(reactHost);
+                window.IOE.state.correctAnswers.set('câu hỏi 1: choose the correct spelling', 'beautiful');
+                document.getElementById('test-sandbox').style.display = 'none';
+                const domSolved = await window.IOE.auto.stepOnce(true);
+                document.getElementById('test-sandbox').style.display = '';
+                reactHost.remove();
+                log('26. Structural DOM fallback detects modern React exam cards without .question-content', domSolved === true);
+
                 // Final summary
-                const allPassed = failCount === 0 && passCount >= 25;
+                const allPassed = failCount === 0 && passCount >= 28;
                 document.title = allPassed ? 'YANZIOE_E2E_PASSED' : 'YANZIOE_E2E_FAILED';
                 log(`\n🎉 SUMMARY: ${passCount} PASSED, ${failCount} FAILS. STATUS: ${document.title}`, allPassed);
             } catch (err) {
